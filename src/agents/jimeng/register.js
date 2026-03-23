@@ -7,6 +7,11 @@ import {
   step04_jimeng_require_logged_in,
   step05_jimeng_ensure_ai_tool_home,
   step06_jimeng_fill_placeholder,
+  step07_jimeng_ensure_workbench_ready,
+  step08_jimeng_close_open_popovers,
+  step09_jimeng_ensure_mode_image_generation,
+  step10_jimeng_ensure_model,
+  step11_jimeng_ensure_ratio_resolution,
 } from './steps.js';
 
 registerAgentCommands([
@@ -15,6 +20,15 @@ registerAgentCommands([
     picpuckAction: 'jimengGenerateImage',
     homeUrl: 'https://jimeng.jianying.com',
     taskBaseUrl: JIMENG_AI_TOOL_HOME,
-    steps: [step04_jimeng_require_logged_in, step05_jimeng_ensure_ai_tool_home, step06_jimeng_fill_placeholder],
+    steps: [
+      step04_jimeng_require_logged_in,
+      step05_jimeng_ensure_ai_tool_home,
+      step06_jimeng_fill_placeholder,
+      step07_jimeng_ensure_workbench_ready,
+      step08_jimeng_close_open_popovers,
+      step09_jimeng_ensure_mode_image_generation,
+      step10_jimeng_ensure_model,
+      step11_jimeng_ensure_ratio_resolution,
+    ],
   },
 ]);

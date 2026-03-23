@@ -40,5 +40,19 @@
     "https://gemini.google.com/*",
     "http://localhost/*",
     "http://127.0.0.1/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/core/injectHelpersMainWorld.js",
+        "src/agents/jimeng/jimengImageMainWorld.js"
+      ],
+      "matches": [
+        "https://jimeng.jianying.com/*",
+        "https://gemini.google.com/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ]
+    }
   ]
 }
