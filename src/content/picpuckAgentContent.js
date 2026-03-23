@@ -244,6 +244,35 @@
       safeRuntimeSendMessage({ type: LOG_APPEND, entry: d.entry });
       return;
     }
+    /** MAIN 捕获整图二进制后交内容脚本写剪贴板（MAIN 无 clipboard API） */
+    if (d && d.picpuckBridge === true && d.kind === 'GEMINI_FULL_IMAGE_BUFFER') {
+      (async () => {
+        let ok = false;
+        let err = '';
+        try {
+          const buf = d._buffer;
+          if (!(buf instanceof ArrayBuffer)) {
+            throw new Error('GEMINI_CLIPBOARD_FAILED');
+          }
+          const ctRaw = typeof d.contentType === 'string' && d.contentType ? d.contentType : 'image/png';
+          const blob = new Blob([buf], { type: ctRaw.split(';')[0].trim() });
+          await navigator.clipboard.write([new ClipboardItem({ [blob.type || 'image/png']: blob })]);
+          ok = true;
+        } catch (e) {
+          err = e instanceof Error ? e.message : String(e);
+        }
+        window.postMessage(
+          {
+            picpuckBridge: true,
+            kind: 'GEMINI_FULL_IMAGE_CLIPBOARD_DONE',
+            ok,
+            error: ok ? undefined : err || 'GEMINI_CLIPBOARD_FAILED',
+          },
+          window.location.origin,
+        );
+      })();
+      return;
+    }
     if (!d || d.type !== PAGE_CMD) return;
     safeRuntimeSendMessage({ type: PICPUCK_COMMAND, payload: d }, (res) => {
       let lastErr = '';

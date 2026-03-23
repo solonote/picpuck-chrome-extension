@@ -13,6 +13,7 @@ import { GEMINI_APP_HOME, isGeminiAppUrl } from './geminiUrls.js';
 
 /** 与 `manifest.json` `web_accessible_resources` 路径一致 */
 const GEMINI_IMAGE_MAIN_WORLD_FILE = 'src/agents/gemini/geminiImageMainWorld.js';
+const FETCH_CAPTURE_MAIN_FILE = 'src/core/picpuckFetchCaptureMainWorld.js';
 
 function payloadString(payload, key) {
   if (!payload || typeof payload !== 'object') return '';
@@ -46,12 +47,26 @@ function effectiveGeminiPrompt(raw, aspectRatioId) {
   return '--ar=' + aspectRatioId + '，' + p;
 }
 
-async function ensureGeminiImageMainWorldInjected(tabId) {
+async function ensureGeminiImageMainWorldInjected(tabId, allFrames) {
+  const target = allFrames ? { tabId, allFrames: true } : { tabId };
   await chrome.scripting.executeScript({
-    target: { tabId },
+    target,
     world: 'MAIN',
     files: [GEMINI_IMAGE_MAIN_WORLD_FILE],
   });
+}
+
+/**
+ * @param {unknown[]} results
+ */
+function pickGeminiMainResult(results) {
+  if (!Array.isArray(results) || results.length === 0) return null;
+  for (const ir of results) {
+    const r = ir && typeof ir === 'object' && 'result' in ir ? ir.result : null;
+    if (r && typeof r === 'object' && r.ok === true) return r;
+  }
+  const first = results[0];
+  return first && typeof first === 'object' && 'result' in first ? first.result : null;
 }
 
 /**
@@ -59,19 +74,21 @@ async function ensureGeminiImageMainWorldInjected(tabId) {
  * @param {{ nn: number, stepKey: string, runnerName: string, mainPayload: Record<string, unknown>, failUserMsg: string }} opts
  */
 async function execGeminiMainRunner(ctx, opts) {
-  const { tabId, roundId, payload } = ctx;
-  const { nn, stepKey, runnerName, mainPayload, failUserMsg } = opts;
+  const { tabId, roundId } = ctx;
+  const { nn, stepKey, runnerName, mainPayload, failUserMsg, allFrames } = opts;
+  const useAllFrames = !!allFrames;
   logStepEnter(tabId, roundId, stepKey, nn);
   try {
-    await ensureGeminiImageMainWorldInjected(tabId);
+    await ensureGeminiImageMainWorldInjected(tabId, useAllFrames);
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e);
     logStepFail(tabId, roundId, stepKey, nn, '动作失败+页内 Gemini 脚本注入失败请刷新页面后重试', m.slice(0, 500));
     throw new Error(GEMINI_IMAGE_MAIN_INJECT_FAILED);
   }
   const mergedPayload = { roundId, ...mainPayload };
-  const [injRes] = await chrome.scripting.executeScript({
-    target: { tabId },
+  const target = useAllFrames ? { tabId, allFrames: true } : { tabId };
+  const results = await chrome.scripting.executeScript({
+    target,
     world: 'MAIN',
     func: async (packed) => {
       const gl = typeof globalThis !== 'undefined' ? globalThis : window;
@@ -83,7 +100,7 @@ async function execGeminiMainRunner(ctx, opts) {
     },
     args: [{ runnerName, payload: mergedPayload }],
   });
-  const r = injRes?.result;
+  const r = pickGeminiMainResult(results);
   if (!r || r.ok !== true) {
     const code = r && r.code ? String(r.code) : GEMINI_UI_NOT_READY;
     logStepFail(tabId, roundId, stepKey, nn, failUserMsg, code.slice(0, 500));
@@ -244,10 +261,10 @@ export async function step10_gemini_confirm_prompt_applied(ctx) {
   logStepDone(tabId, roundId, stepKey, 10);
 }
 
-/** fillOnly 时跳过点击发送 */
-export async function step11_gemini_click_send_if_needed(ctx) {
+/** fillOnly 时跳过：否则在输入区派发 Enter 提交 */
+export async function step11_gemini_submit_enter_if_needed(ctx) {
   const { tabId, roundId, payload } = ctx;
-  const stepKey = 'step11_gemini_click_send_if_needed';
+  const stepKey = 'step11_gemini_submit_enter_if_needed';
   if (payloadFillOnly(payload)) {
     logStepEnter(tabId, roundId, stepKey, 11);
     logStepInfo(tabId, roundId, stepKey, 11, 'Step11.本步跳过+fillOnly');
@@ -257,8 +274,60 @@ export async function step11_gemini_click_send_if_needed(ctx) {
   await execGeminiMainRunner(ctx, {
     nn: 11,
     stepKey,
-    runnerName: 'runStep11GeminiClickSendIfNeeded',
+    runnerName: 'runStep11GeminiSubmitEnterIfNeeded',
     mainPayload: {},
-    failUserMsg: '动作失败+找不到 Gemini 发送按钮',
+    failUserMsg: '动作失败+无法用 Enter 提交 Gemini 提示词',
+    allFrames: true,
+  });
+}
+
+/** 等待 generated-image 与预览图（3 分钟） */
+export async function step12_gemini_wait_generated_image(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step12_gemini_wait_generated_image';
+  if (payloadFillOnly(payload)) {
+    logStepEnter(tabId, roundId, stepKey, 12);
+    logStepInfo(tabId, roundId, stepKey, 12, 'Step12.本步跳过+fillOnly');
+    logStepDone(tabId, roundId, stepKey, 12);
+    return;
+  }
+  await execGeminiMainRunner(ctx, {
+    nn: 12,
+    stepKey,
+    runnerName: 'runStep12GeminiWaitGeneratedImage',
+    mainPayload: {},
+    failUserMsg: '动作失败+等待 Gemini 生成图超时',
+    allFrames: true,
+  });
+}
+
+/** 注入公共捕获脚本 → 点「下载完整尺寸」→ 首条 >1MB 的 lh3 rd-gg-dl 图片写入剪贴板 */
+export async function step13_gemini_download_full_image_to_clipboard(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step13_gemini_download_full_image_to_clipboard';
+  if (payloadFillOnly(payload)) {
+    logStepEnter(tabId, roundId, stepKey, 13);
+    logStepInfo(tabId, roundId, stepKey, 13, 'Step13.本步跳过+fillOnly');
+    logStepDone(tabId, roundId, stepKey, 13);
+    return;
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      world: 'MAIN',
+      files: [FETCH_CAPTURE_MAIN_FILE],
+    });
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    logStepFail(tabId, roundId, stepKey, 13, '动作失败+网络捕获脚本注入失败请刷新页面', m.slice(0, 500));
+    throw new Error(GEMINI_IMAGE_MAIN_INJECT_FAILED);
+  }
+  await execGeminiMainRunner(ctx, {
+    nn: 13,
+    stepKey,
+    runnerName: 'runStep13GeminiDownloadFullImageToClipboard',
+    mainPayload: { captureTimeoutMs: 120000 },
+    failUserMsg: '动作失败+整图下载链或剪贴板写入失败',
+    allFrames: true,
   });
 }

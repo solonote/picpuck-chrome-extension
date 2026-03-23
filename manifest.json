@@ -46,7 +46,8 @@
       "resources": [
         "src/core/injectHelpersMainWorld.js",
         "src/agents/jimeng/jimengImageMainWorld.js",
-        "src/agents/gemini/geminiImageMainWorld.js"
+        "src/agents/gemini/geminiImageMainWorld.js",
+        "src/core/picpuckFetchCaptureMainWorld.js"
       ],
       "matches": [
         "https://jimeng.jianying.com/*",

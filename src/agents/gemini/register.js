@@ -11,7 +11,9 @@ import {
   step08_gemini_ensure_bard_mode,
   step09_gemini_fill_input_and_paste_images,
   step10_gemini_confirm_prompt_applied,
-  step11_gemini_click_send_if_needed,
+  step11_gemini_submit_enter_if_needed,
+  step12_gemini_wait_generated_image,
+  step13_gemini_download_full_image_to_clipboard,
 } from './steps.js';
 
 registerAgentCommands([
@@ -28,7 +30,9 @@ registerAgentCommands([
       step08_gemini_ensure_bard_mode,
       step09_gemini_fill_input_and_paste_images,
       step10_gemini_confirm_prompt_applied,
-      step11_gemini_click_send_if_needed,
+      step11_gemini_submit_enter_if_needed,
+      step12_gemini_wait_generated_image,
+      step13_gemini_download_full_image_to_clipboard,
     ],
   },
 ]);
