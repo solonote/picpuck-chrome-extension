@@ -10,6 +10,7 @@ import { pushRoundPhaseUi } from './phaseUi.js';
 import {
   frameworkStep01_clearRoundLogs,
   frameworkStep02_attachLogSink,
+  frameworkStep03_ensurePageHelpers,
 } from './frameworkPreflight.js';
 
 /**
@@ -19,7 +20,7 @@ import {
 export async function dispatchRound(args) {
   const { clientRequestId, command, tabId, roundId, payload } = args;
   const rec = getCommandRecord(command);
-  // step01/step02 由 core 框架统一执行；steps 仅含站点业务步骤（§5.1）
+  // step01～step03 由 core 框架统一执行；steps 仅含站点业务步骤（§5.1）
   if (!rec || !Array.isArray(rec.steps)) {
     await releaseExecSlot(tabId);
     inFlightByTabId.delete(tabId);
@@ -41,8 +42,9 @@ export async function dispatchRound(args) {
 
     await frameworkStep01_clearRoundLogs(ctx);
     await frameworkStep02_attachLogSink(ctx);
+    await frameworkStep03_ensurePageHelpers(ctx);
 
-    // §5.1：step02 完成后再置 running，直至终止态
+    // §5.1：框架前序完成后再置 running，直至终止态
     updatePhase(tabId, 'running');
     await pushRoundPhaseUi(tabId, roundId);
 
