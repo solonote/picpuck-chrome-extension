@@ -1,5 +1,5 @@
 /**
- * Gemini 站点 Agent（R18）。`homeUrl` 须与实际上线入口一致，否则新建 Tab 后 §9.4 url 复验会失败。
+ * Gemini 站点 Agent（R18）。`taskBaseUrl` 为新建 Tab 打开的制作入口，须以 `homeUrl` 站点前缀开头；否则 §9.4 url 复验会失败。
  */
 import { registerAgentCommands } from '../../core/registry.js';
 import {
@@ -12,8 +12,8 @@ registerAgentCommands([
   {
     command: 'GEMINI_IMAGE_FILL',
     picpuckAction: 'geminiGenerateImage',
-    taskBaseUrl: 'https://gemini.google.com',
-    homeUrl: 'https://gemini.google.com/app',
+    homeUrl: 'https://gemini.google.com',
+    taskBaseUrl: 'https://gemini.google.com/app',
     steps: [step01_clear_round_logs, step02_attach_log_sink, step03_gemini_fill_placeholder],
   },
 ]);

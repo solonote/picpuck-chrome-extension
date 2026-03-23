@@ -1,6 +1,6 @@
 /**
- * §9.4 allocateTab(command)：每次请求全量 `tabs.query`（§9.2）→ 前缀匹配 `taskBaseUrl` →
- * 按 tab.id 升序尝试 §9.3 原子抢占；无 idle 则新建 Tab 并在 load complete 后复验 url 前缀再抢占。
+ * §9.4 allocateTab(command)：每次请求全量 `tabs.query`（§9.2）→ 按站点 `homeUrl` 前缀筛候选 Tab →
+ * 按 tab.id 升序尝试 §9.3 原子抢占；无 idle 则 `tabs.create({ url: taskBaseUrl })` 并在 load complete 后复验 url 仍以 `homeUrl` 为前缀再抢占。
  */
 import { getCommandRecord } from './registry.js';
 import { injectableAcquireExecSlot } from './execSlot/injectableAcquireExecSlot.js';
@@ -18,13 +18,13 @@ export async function allocateTab(command) {
   if (!rec) {
     return { ok: false, errorCode: 'UNKNOWN_COMMAND', message: 'command not registered' };
   }
-  const { taskBaseUrl, homeUrl } = rec;
-  if (typeof taskBaseUrl !== 'string' || typeof homeUrl !== 'string' || !homeUrl.startsWith(taskBaseUrl)) {
+  const { homeUrl, taskBaseUrl } = rec;
+  if (typeof homeUrl !== 'string' || typeof taskBaseUrl !== 'string' || !taskBaseUrl.startsWith(homeUrl)) {
     return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'invalid CommandRecord urls' };
   }
 
   const all = await chrome.tabs.query({});
-  const candidates = filterAndSortCandidates(all, taskBaseUrl);
+  const candidates = filterAndSortCandidates(all, homeUrl);
 
   // R12：同一前缀下第一个 idle 候选即复用；注入失败（跨域页等）则试下一个
   for (const tab of candidates) {
@@ -41,13 +41,13 @@ export async function allocateTab(command) {
     return { ok: false, errorCode: 'TAB_POOL_EXHAUSTED' };
   }
 
-  const created = await chrome.tabs.create({ url: homeUrl, active: true });
+  const created = await chrome.tabs.create({ url: taskBaseUrl, active: true });
   if (created.id == null) {
     return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'tabs.create no id' };
   }
 
   try {
-    await waitForTabUrlPrefix(created.id, taskBaseUrl, 60000);
+    await waitForTabUrlPrefix(created.id, homeUrl, 60000);
   } catch (e) {
     console.warn('[PicPuck] waitForTabUrlPrefix', e);
     return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'new tab url timeout' };
@@ -88,11 +88,11 @@ async function tryAcquireOnTab(tabId) {
 
 /**
  * @param {number} tabId
- * @param {string} taskBaseUrl
+ * @param {string} urlPrefix 站点 homeUrl 前缀，用于确认导航未跳出本站
  * @param {number} timeoutMs
  */
-/** §9.4 第 5 步：新建 Tab 须在 complete 且 url 仍以 taskBaseUrl 为前缀后再执行 9.3 */
-function waitForTabUrlPrefix(tabId, taskBaseUrl, timeoutMs) {
+/** §9.4 第 5 步：新建 Tab 须在 complete 且 url 仍以站点 homeUrl 为前缀后再执行 9.3 */
+function waitForTabUrlPrefix(tabId, urlPrefix, timeoutMs) {
   return new Promise((resolve, reject) => {
     let settled = false;
     const cleanup = () => {
@@ -107,7 +107,7 @@ function waitForTabUrlPrefix(tabId, taskBaseUrl, timeoutMs) {
     }, timeoutMs);
 
     const matches = (tab) =>
-      !!tab?.url && tab.url.startsWith('http') && tab.url.startsWith(taskBaseUrl);
+      !!tab?.url && tab.url.startsWith('http') && tab.url.startsWith(urlPrefix);
 
     const onUpd = (id, change, tab) => {
       if (id !== tabId) return;
