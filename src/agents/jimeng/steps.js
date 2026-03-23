@@ -42,12 +42,12 @@ async function ensureJimengImageMainWorldInjected(tabId) {
 /**
  * 注入 `jimengImageMainWorld.js` 并调用 `globalThis.__picpuckJimengImage[runnerName](payload)`。
  * @param {object} ctx dispatchRound 上下文
- * @param {{ nn: number, stepKey: string, runnerName: string, mainPayload: Record<string, unknown>, failUserMsg: string }} opts
+ * @param {{ nn: number, stepKey: string, runnerName: string, mainPayload: Record<string, unknown>, failUserMsg: string, startMsg: string, doneMsg: string }} opts
  */
 async function execJimengMainRunner(ctx, opts) {
-  const { tabId, roundId, payload } = ctx;
-  const { nn, stepKey, runnerName, mainPayload, failUserMsg } = opts;
-  logStepEnter(tabId, roundId, stepKey, nn);
+  const { tabId, roundId } = ctx;
+  const { nn, stepKey, runnerName, mainPayload, failUserMsg, startMsg, doneMsg } = opts;
+  logStepEnter(tabId, roundId, stepKey, nn, startMsg);
   try {
     await ensureJimengImageMainWorldInjected(tabId);
   } catch (e) {
@@ -72,10 +72,11 @@ async function execJimengMainRunner(ctx, opts) {
   const r = injRes?.result;
   if (!r || r.ok !== true) {
     const code = r && r.code ? String(r.code) : JIMENG_WORKBENCH_NOT_READY;
-    logStepFail(tabId, roundId, stepKey, nn, failUserMsg, code.slice(0, 500));
+    const detail = r && typeof r.detail === 'string' ? r.detail : '';
+    logStepFail(tabId, roundId, stepKey, nn, failUserMsg, (detail || code).slice(0, 500));
     throw new Error(code);
   }
-  logStepDone(tabId, roundId, stepKey, nn);
+  logStepDone(tabId, roundId, stepKey, nn, doneMsg);
 }
 
 /**
@@ -101,7 +102,7 @@ function readJimengLoggedInFlagMain() {
 export async function step04_jimeng_require_logged_in(ctx) {
   const { tabId, roundId } = ctx;
   const stepKey = 'step04_jimeng_require_logged_in';
-  logStepEnter(tabId, roundId, stepKey, 4);
+  logStepEnter(tabId, roundId, stepKey, 4, '检查各 frame 是否已登录即梦');
 
   const frameResults = await executeInAllFrames(tabId, readJimengLoggedInFlagMain);
   const loggedIn = frameResults.some((v) => v === 1);
@@ -118,7 +119,7 @@ export async function step04_jimeng_require_logged_in(ctx) {
     throw new Error('JIMENG_NOT_LOGGED_IN');
   }
 
-  logStepDone(tabId, roundId, stepKey, 4);
+  logStepDone(tabId, roundId, stepKey, 4, '已确认即梦登录状态');
 }
 
 /**
@@ -127,7 +128,7 @@ export async function step04_jimeng_require_logged_in(ctx) {
 export async function step05_jimeng_ensure_ai_tool_home(ctx) {
   const { tabId, roundId } = ctx;
   const stepKey = 'step05_jimeng_ensure_ai_tool_home';
-  logStepEnter(tabId, roundId, stepKey, 5);
+  logStepEnter(tabId, roundId, stepKey, 5, '确认在即梦站点并进入 AI 工作台首页');
 
   const tab = await chrome.tabs.get(tabId);
   const url = tab.url || '';
@@ -137,17 +138,17 @@ export async function step05_jimeng_ensure_ai_tool_home(ctx) {
   }
 
   if (isJimengAiToolHomeUrl(url)) {
-    logStepInfo(tabId, roundId, stepKey, 5, '已在即梦工作台页执行滚顶');
+    logStepInfo(tabId, roundId, stepKey, 5, '已在工作台页将编辑区滚至顶部');
     await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
       func: scrollTopViaInjectMain,
     });
-    logStepDone(tabId, roundId, stepKey, 5);
+    logStepDone(tabId, roundId, stepKey, 5, '工作台首页就绪');
     return;
   }
 
-  logStepInfo(tabId, roundId, stepKey, 5, '导航至即梦工作台首页');
+  logStepInfo(tabId, roundId, stepKey, 5, '正在导航至即梦工作台首页');
 
   try {
     await chrome.tabs.update(tabId, { url: JIMENG_AI_TOOL_HOME });
@@ -178,7 +179,7 @@ export async function step05_jimeng_ensure_ai_tool_home(ctx) {
     func: scrollTopViaInjectMain,
   });
 
-  logStepDone(tabId, roundId, stepKey, 5);
+  logStepDone(tabId, roundId, stepKey, 5, '已打开工作台首页并滚顶');
 }
 
 /** 设计 §4.1.2：工作台就绪（仅 hasForm 链，不切换模式/模型） */
@@ -189,6 +190,8 @@ export async function step07_jimeng_ensure_workbench_ready(ctx) {
     runnerName: 'runStep07EnsureWorkbenchReady',
     mainPayload: {},
     failUserMsg: '动作失败+即梦工作台未就绪请刷新或稍后重试',
+    startMsg: '检查工作台表单与画布是否就绪',
+    doneMsg: '工作台已就绪',
   });
 }
 
@@ -200,6 +203,8 @@ export async function step08_jimeng_close_open_popovers(ctx) {
     runnerName: 'runStep08CloseOpenPopovers',
     mainPayload: {},
     failUserMsg: '动作失败+无法关闭即梦下拉层',
+    startMsg: '关闭已打开的下拉与浮层',
+    doneMsg: '浮层已关闭',
   });
 }
 
@@ -211,6 +216,8 @@ export async function step09_jimeng_ensure_mode_image_generation(ctx) {
     runnerName: 'runStep09EnsureModeImageGeneration',
     mainPayload: {},
     failUserMsg: '动作失败+无法切换到图片生成模式',
+    startMsg: '将生成类型切换为「图片生成」',
+    doneMsg: '已处于图片生成模式',
   });
 }
 
@@ -225,6 +232,8 @@ export async function step10_jimeng_ensure_model(ctx) {
       modelLabel: payloadString(payload, 'modelLabel'),
     },
     failUserMsg: '动作失败+无法选择即梦模型',
+    startMsg: '在模型下拉中选择请求指定的模型',
+    doneMsg: '模型已选择',
   });
 }
 
@@ -240,6 +249,8 @@ export async function step11_jimeng_ensure_ratio_resolution(ctx) {
       resolutionLabel: payloadString(payload, 'resolutionLabel'),
     },
     failUserMsg: '动作失败+无法设置画幅或分辨率',
+    startMsg: '设置画幅比例与分辨率',
+    doneMsg: '画幅与分辨率已设置',
   });
 }
 
@@ -251,6 +262,8 @@ export async function step12_jimeng_clear_form(ctx) {
     runnerName: 'runStep12ClearForm',
     mainPayload: {},
     failUserMsg: '动作失败+未找到即梦提示词区域或无法清空',
+    startMsg: '清空提示词并移除页面上已有参考图',
+    doneMsg: '表单已清空',
   });
 }
 
@@ -260,9 +273,7 @@ export async function step13_jimeng_paste_reference_clear_prompt(ctx) {
   const stepKey = 'step13_jimeng_paste_reference_clear_prompt';
   const images = payloadImages(payload);
   if (images.length === 0) {
-    logStepEnter(tabId, roundId, stepKey, 13);
-    logStepInfo(tabId, roundId, stepKey, 13, 'Step13.本步跳过');
-    logStepDone(tabId, roundId, stepKey, 13);
+    logStepInfo(tabId, roundId, stepKey, 13, '无参考图跳过粘贴参考图');
     return;
   }
   await execJimengMainRunner(ctx, {
@@ -271,6 +282,8 @@ export async function step13_jimeng_paste_reference_clear_prompt(ctx) {
     runnerName: 'runStep13PasteReferenceClearPrompt',
     mainPayload: { images },
     failUserMsg: '动作失败+即梦参考图粘贴或清空失败',
+    startMsg: '逐张粘贴参考图并再次清空提示词区',
+    doneMsg: '参考图已粘贴',
   });
 }
 
@@ -283,6 +296,8 @@ export async function step14_jimeng_fill_prompt_text(ctx) {
     runnerName: 'runStep14FillPromptText',
     mainPayload: { prompt: payloadString(payload, 'prompt') },
     failUserMsg: '动作失败+无法写入即梦提示词',
+    startMsg: '写入用户提示词（含占位符）',
+    doneMsg: '提示词已写入',
   });
 }
 
@@ -292,9 +307,7 @@ export async function step15_jimeng_expand_at_mentions(ctx) {
   const stepKey = 'step15_jimeng_expand_at_mentions';
   const images = payloadImages(payload);
   if (images.length === 0) {
-    logStepEnter(tabId, roundId, stepKey, 15);
-    logStepInfo(tabId, roundId, stepKey, 15, 'Step15.本步跳过');
-    logStepDone(tabId, roundId, stepKey, 15);
+    logStepInfo(tabId, roundId, stepKey, 15, '无参考图跳过展开 @ 引用');
     return;
   }
   await execJimengMainRunner(ctx, {
@@ -306,6 +319,8 @@ export async function step15_jimeng_expand_at_mentions(ctx) {
       images,
     },
     failUserMsg: '动作失败+即梦 @ 参考图或占位符校验失败',
+    startMsg: '将 (参考图片N) 展开为 @ 并选择对应参考图',
+    doneMsg: '@ 引用已展开',
   });
 }
 
@@ -317,6 +332,8 @@ export async function step16_jimeng_set_logged_in_marker(ctx) {
     runnerName: 'runStep16SetLoggedInMarker',
     mainPayload: {},
     failUserMsg: '动作失败+即梦页内状态标记失败',
+    startMsg: '在页内写入登录状态标记',
+    doneMsg: '登录标记已写入',
   });
 }
 
@@ -329,5 +346,7 @@ export async function step17_jimeng_click_generate_if_needed(ctx) {
     runnerName: 'runStep17ClickGenerateIfNeeded',
     mainPayload: { fillOnly: payloadFillOnly(payload) },
     failUserMsg: '动作失败+无法点击即梦生成按钮',
+    startMsg: '按需点击即梦「生成」按钮',
+    doneMsg: '生成动作已处理',
   });
 }

@@ -29,6 +29,46 @@
     }
   }
 
+  /**
+   * 扩展在后台标签写剪贴板时浏览器常拒（文档未聚焦）；先激活本标签所在窗口与标签再写。
+   */
+  async function focusThisTabForClipboardWrite() {
+    try {
+      if (!extensionRuntimeOk() || typeof chrome.tabs.getCurrent !== 'function') return;
+      const tab = await chrome.tabs.getCurrent();
+      if (!tab || tab.id == null || tab.windowId == null) return;
+      await chrome.windows.update(tab.windowId, { focused: true });
+      await chrome.tabs.update(tab.id, { active: true });
+      await new Promise((r) => setTimeout(r, 150));
+    } catch {
+      /* 仍尝试写剪贴板 */
+    }
+  }
+
+  /**
+   * @param {ArrayBuffer} buf
+   * @param {string} contentType
+   */
+  async function writeImageBufferToSystemClipboard(buf, contentType) {
+    await focusThisTabForClipboardWrite();
+    let mime = typeof contentType === 'string' ? contentType.split(';')[0].trim().toLowerCase() : '';
+    if (!mime.startsWith('image/')) mime = 'image/png';
+    const blob = new Blob([buf], { type: mime });
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ [mime]: blob })]);
+      return;
+    } catch (e1) {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ [mime]: Promise.resolve(blob) })]);
+        return;
+      } catch (e2) {
+        const m1 = e1 instanceof Error ? e1.message : String(e1);
+        const m2 = e2 instanceof Error ? e2.message : String(e2);
+        throw new Error(`${m2} | ${m1}`);
+      }
+    }
+  }
+
   /** 与顶栏根背景一致，左右区盖住中层文案边缘，避免与几何居中句叠读 */
   const TOPBAR_SIDE_BG = 'rgba(20,20,24,.98)';
 
@@ -269,11 +309,10 @@
           try {
             const buf = p._buffer;
             if (!(buf instanceof ArrayBuffer)) {
-              throw new Error('GEMINI_CLIPBOARD_FAILED');
+              throw new Error('剪贴板数据不是 ArrayBuffer');
             }
             const ctRaw = typeof p.contentType === 'string' && p.contentType ? p.contentType : 'image/png';
-            const blob = new Blob([buf], { type: ctRaw.split(';')[0].trim() });
-            await navigator.clipboard.write([new ClipboardItem({ [blob.type || 'image/png']: blob })]);
+            await writeImageBufferToSystemClipboard(buf, ctRaw);
             ok = true;
           } catch (e) {
             err = e instanceof Error ? e.message : String(e);

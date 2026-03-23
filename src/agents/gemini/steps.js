@@ -77,13 +77,13 @@ function pickGeminiMainResult(results) {
 
 /**
  * @param {object} ctx dispatchRound 上下文
- * @param {{ nn: number, stepKey: string, runnerName: string, mainPayload: Record<string, unknown>, failUserMsg: string }} opts
+ * @param {{ nn: number, stepKey: string, runnerName: string, mainPayload: Record<string, unknown>, failUserMsg: string, startMsg: string, doneMsg: string, allFrames?: boolean }} opts
  */
 async function execGeminiMainRunner(ctx, opts) {
   const { tabId, roundId } = ctx;
-  const { nn, stepKey, runnerName, mainPayload, failUserMsg, allFrames } = opts;
+  const { nn, stepKey, runnerName, mainPayload, failUserMsg, startMsg, doneMsg, allFrames } = opts;
   const useAllFrames = !!allFrames;
-  logStepEnter(tabId, roundId, stepKey, nn);
+  logStepEnter(tabId, roundId, stepKey, nn, startMsg);
   try {
     await ensureGeminiImageMainWorldInjected(tabId, useAllFrames);
   } catch (e) {
@@ -109,10 +109,11 @@ async function execGeminiMainRunner(ctx, opts) {
   const r = pickGeminiMainResult(results);
   if (!r || r.ok !== true) {
     const code = r && r.code ? String(r.code) : GEMINI_UI_NOT_READY;
-    logStepFail(tabId, roundId, stepKey, nn, failUserMsg, code.slice(0, 500));
+    const detail = r && typeof r.detail === 'string' ? r.detail : '';
+    logStepFail(tabId, roundId, stepKey, nn, failUserMsg, (detail || code).slice(0, 500));
     throw new Error(code);
   }
-  logStepDone(tabId, roundId, stepKey, nn);
+  logStepDone(tabId, roundId, stepKey, nn, doneMsg);
 }
 
 /**
@@ -134,14 +135,14 @@ function readGeminiLoggedInMain() {
 export async function step04_gemini_require_logged_in(ctx) {
   const { tabId, roundId } = ctx;
   const stepKey = 'step04_gemini_require_logged_in';
-  logStepEnter(tabId, roundId, stepKey, 4);
+  logStepEnter(tabId, roundId, stepKey, 4, '检查各 frame 是否已登录 Google 账号');
 
   const frameResults = await executeInAllFrames(tabId, readGeminiLoggedInMain);
   const anyIn = frameResults.some((v) => v === 1);
   const anyOut = frameResults.some((v) => v === 0);
 
   if (anyIn) {
-    logStepDone(tabId, roundId, stepKey, 4);
+    logStepDone(tabId, roundId, stepKey, 4, '已确认处于登录状态');
     return;
   }
 
@@ -160,7 +161,7 @@ export async function step04_gemini_require_logged_in(ctx) {
 export async function step05_gemini_ensure_app_home(ctx) {
   const { tabId, roundId } = ctx;
   const stepKey = 'step05_gemini_ensure_app_home';
-  logStepEnter(tabId, roundId, stepKey, 5);
+  logStepEnter(tabId, roundId, stepKey, 5, '确认当前在 Gemini 站点并进入应用首页');
 
   const tab = await chrome.tabs.get(tabId);
   const url = tab.url || '';
@@ -170,17 +171,17 @@ export async function step05_gemini_ensure_app_home(ctx) {
   }
 
   if (isGeminiAppUrl(url)) {
-    logStepInfo(tabId, roundId, stepKey, 5, '已在 Gemini 应用页执行滚顶');
+    logStepInfo(tabId, roundId, stepKey, 5, '已在应用页将对话区滚至顶部');
     await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
       func: scrollTopViaInjectMain,
     });
-    logStepDone(tabId, roundId, stepKey, 5);
+    logStepDone(tabId, roundId, stepKey, 5, '应用页就绪');
     return;
   }
 
-  logStepInfo(tabId, roundId, stepKey, 5, '导航至 Gemini 应用首页');
+  logStepInfo(tabId, roundId, stepKey, 5, '正在导航至 Gemini 应用首页');
   try {
     await chrome.tabs.update(tabId, { url: GEMINI_APP_HOME });
     await waitForTabUrlWhen(
@@ -201,7 +202,7 @@ export async function step05_gemini_ensure_app_home(ctx) {
     world: 'MAIN',
     func: scrollTopViaInjectMain,
   });
-  logStepDone(tabId, roundId, stepKey, 5);
+  logStepDone(tabId, roundId, stepKey, 5, '已打开应用首页并滚顶');
 }
 
 /** 工具 →「制作图片」 */
@@ -212,6 +213,8 @@ export async function step06_gemini_ensure_make_image_entry(ctx) {
     runnerName: 'runStep06GeminiEnsureMakeImageEntry',
     mainPayload: {},
     failUserMsg: '动作失败+无法进入 Gemini 制作图片模式',
+    startMsg: '打开工具抽屉并进入「制作图片」',
+    doneMsg: '已进入制作图片模式',
   });
 }
 
@@ -221,11 +224,16 @@ export async function step06_gemini_ensure_make_image_entry(ctx) {
 export async function step07_gemini_apply_effective_prompt_on_context(ctx) {
   const { tabId, roundId, payload } = ctx;
   const stepKey = 'step07_gemini_apply_effective_prompt_on_context';
-  logStepEnter(tabId, roundId, stepKey, 7);
+  logStepEnter(tabId, roundId, stepKey, 7, '按画幅与提示词组装本轮有效提示词');
   const ar = normalizeAspectRatioId(payloadString(payload, 'aspectRatioId'));
   ctx.effectivePrompt = effectiveGeminiPrompt(payloadString(payload, 'prompt'), ar);
-  logStepInfo(tabId, roundId, stepKey, 7, 'Step07.已写入+effectivePromptLen=' + (ctx.effectivePrompt || '').length);
-  logStepDone(tabId, roundId, stepKey, 7);
+  logStepDone(
+    tabId,
+    roundId,
+    stepKey,
+    7,
+    '有效提示词已写入上下文长度=' + (ctx.effectivePrompt || '').length,
+  );
 }
 
 /** Pro / 快速（bardMode） */
@@ -239,6 +247,8 @@ export async function step08_gemini_ensure_bard_mode(ctx) {
     runnerName: 'runStep08GeminiEnsureBardMode',
     mainPayload: { bardMode },
     failUserMsg: '动作失败+无法选择 Gemini 生成模式',
+    startMsg: '在模式选择器中选择快速或 Pro（与请求一致）',
+    doneMsg: '对话模式已就绪',
   });
 }
 
@@ -255,6 +265,8 @@ export async function step09_gemini_fill_input_and_paste_images(ctx) {
       images: payloadImages(payload),
     },
     failUserMsg: '动作失败+无法写入 Gemini 输入框或粘贴图片',
+    startMsg: '清空旧参考图写入提示词并粘贴参考图',
+    doneMsg: '输入区与参考图已就绪',
   });
 }
 
@@ -262,9 +274,7 @@ export async function step09_gemini_fill_input_and_paste_images(ctx) {
 export async function step10_gemini_confirm_prompt_applied(ctx) {
   const { tabId, roundId } = ctx;
   const stepKey = 'step10_gemini_confirm_prompt_applied';
-  logStepEnter(tabId, roundId, stepKey, 10);
-  logStepInfo(tabId, roundId, stepKey, 10, 'Step10.填词与贴图步骤已完成');
-  logStepDone(tabId, roundId, stepKey, 10);
+  logStepInfo(tabId, roundId, stepKey, 10, '填词与贴图步骤已执行完毕');
 }
 
 /** fillOnly 时跳过：否则在输入区派发 Enter 提交（仅主 frame：allFrames 时子 frame 会拖满 executeScript 整轮 Promise） */
@@ -272,9 +282,7 @@ export async function step11_gemini_submit_enter_if_needed(ctx) {
   const { tabId, roundId, payload } = ctx;
   const stepKey = 'step11_gemini_submit_enter_if_needed';
   if (payloadFillOnly(payload)) {
-    logStepEnter(tabId, roundId, stepKey, 11);
-    logStepInfo(tabId, roundId, stepKey, 11, 'Step11.本步跳过+fillOnly');
-    logStepDone(tabId, roundId, stepKey, 11);
+    logStepInfo(tabId, roundId, stepKey, 11, '填词仅模式跳过在输入区按 Enter 提交');
     return;
   }
   await execGeminiMainRunner(ctx, {
@@ -283,6 +291,8 @@ export async function step11_gemini_submit_enter_if_needed(ctx) {
     runnerName: 'runStep11GeminiSubmitEnterIfNeeded',
     mainPayload: {},
     failUserMsg: '动作失败+无法用 Enter 提交 Gemini 提示词',
+    startMsg: '在输入区模拟 Enter 提交生成请求',
+    doneMsg: '已提交生成请求',
   });
 }
 
@@ -291,9 +301,7 @@ export async function step12_gemini_wait_generated_image(ctx) {
   const { tabId, roundId, payload } = ctx;
   const stepKey = 'step12_gemini_wait_generated_image';
   if (payloadFillOnly(payload)) {
-    logStepEnter(tabId, roundId, stepKey, 12);
-    logStepInfo(tabId, roundId, stepKey, 12, 'Step12.本步跳过+fillOnly');
-    logStepDone(tabId, roundId, stepKey, 12);
+    logStepInfo(tabId, roundId, stepKey, 12, '填词仅模式跳过等待生成预览图');
     return;
   }
   await execGeminiMainRunner(ctx, {
@@ -302,6 +310,8 @@ export async function step12_gemini_wait_generated_image(ctx) {
     runnerName: 'runStep12GeminiWaitGeneratedImage',
     mainPayload: {},
     failUserMsg: '动作失败+等待 Gemini 生成图超时',
+    startMsg: '等待页面出现已加载的生成预览图',
+    doneMsg: '预览图已出现',
   });
 }
 
@@ -310,9 +320,7 @@ export async function step13_gemini_download_full_image_to_clipboard(ctx) {
   const { tabId, roundId, payload } = ctx;
   const stepKey = 'step13_gemini_download_full_image_to_clipboard';
   if (payloadFillOnly(payload)) {
-    logStepEnter(tabId, roundId, stepKey, 13);
-    logStepInfo(tabId, roundId, stepKey, 13, 'Step13.本步跳过+fillOnly');
-    logStepDone(tabId, roundId, stepKey, 13);
+    logStepInfo(tabId, roundId, stepKey, 13, '填词仅模式跳过整图下载与剪贴板');
     return;
   }
   await execGeminiMainRunner(ctx, {
@@ -321,5 +329,7 @@ export async function step13_gemini_download_full_image_to_clipboard(ctx) {
     runnerName: 'runStep13GeminiDownloadFullImageToClipboard',
     mainPayload: { captureTimeoutMs: 120000 },
     failUserMsg: '动作失败+整图下载链或剪贴板写入失败',
+    startMsg: '点击整图下载拦截响应并写入系统剪贴板',
+    doneMsg: '整图已写入系统剪贴板',
   });
 }

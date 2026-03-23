@@ -503,9 +503,9 @@
       var armMsg = eArm && eArm.message ? String(eArm.message) : String(eArm);
       postGeminiClipboardAbort();
       if (armMsg.indexOf('GEMINI_CLIPBOARD_ARM_TIMEOUT') !== -1) {
-        return { ok: false, code: 'GEMINI_CLIPBOARD_ARM_TIMEOUT' };
+        return { ok: false, code: 'GEMINI_CLIPBOARD_ARM_TIMEOUT', detail: armMsg };
       }
-      return { ok: false, code: 'GEMINI_CLIPBOARD_FAILED' };
+      return { ok: false, code: 'GEMINI_CLIPBOARD_FAILED', detail: armMsg };
     }
     var captureTimeoutMs =
       payload && typeof payload.captureTimeoutMs === 'number' && payload.captureTimeoutMs > 0 ? payload.captureTimeoutMs : 120000;
@@ -550,9 +550,9 @@
       cap.disarm();
       postGeminiClipboardAbort();
       if (msg.indexOf('GEMINI_FULL_IMAGE_CAPTURE_TIMEOUT') !== -1) {
-        return { ok: false, code: 'GEMINI_FULL_IMAGE_CAPTURE_TIMEOUT' };
+        return { ok: false, code: 'GEMINI_FULL_IMAGE_CAPTURE_TIMEOUT', detail: msg };
       }
-      return { ok: false, code: 'GEMINI_CLIPBOARD_FAILED' };
+      return { ok: false, code: 'GEMINI_CLIPBOARD_FAILED', detail: msg };
     }
   }
 

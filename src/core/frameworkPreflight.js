@@ -14,11 +14,9 @@ const INJECT_HELPERS_MAIN_FILE = 'src/core/injectHelpersMainWorld.js';
  */
 export async function frameworkStep01_clearRoundLogs(ctx) {
   const { tabId, roundId } = ctx;
-  // 先清空缓冲区，再写 step01 的进入/完成（避免被 clear 抹掉）
   clearRoundLogs(tabId);
   const stepKey = 'step01_clear_round_logs';
-  logStepEnter(tabId, roundId, stepKey, 1);
-  logStepDone(tabId, roundId, stepKey, 1);
+  logStepInfo(tabId, roundId, stepKey, 1, '已清空本轮日志缓冲区');
 }
 
 /**
@@ -27,9 +25,9 @@ export async function frameworkStep01_clearRoundLogs(ctx) {
 export async function frameworkStep02_attachLogSink(ctx) {
   const { tabId, roundId } = ctx;
   const stepKey = 'step02_attach_log_sink';
-  logStepEnter(tabId, roundId, stepKey, 2);
+  logStepInfo(tabId, roundId, stepKey, 2, '正在绑定当前标签页日志槽');
   attachLogSink(tabId, roundId);
-  logStepDone(tabId, roundId, stepKey, 2);
+  logStepInfo(tabId, roundId, stepKey, 2, '日志槽已绑定到当前轮次');
 }
 
 /**
@@ -40,7 +38,7 @@ export async function frameworkStep02_attachLogSink(ctx) {
 export async function frameworkStep03_ensurePageHelpers(ctx) {
   const { tabId, roundId } = ctx;
   const stepKey = 'step03_ensure_page_helpers';
-  logStepEnter(tabId, roundId, stepKey, 3);
+  logStepInfo(tabId, roundId, stepKey, 3, '正在注入页内 DataURL 与粘贴辅助工具');
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -76,5 +74,5 @@ export async function frameworkStep03_ensurePageHelpers(ctx) {
     throw new Error('PAGE_HELPERS_NOT_READY');
   }
 
-  logStepDone(tabId, roundId, stepKey, 3);
+  logStepInfo(tabId, roundId, stepKey, 3, '页内工具已就绪');
 }

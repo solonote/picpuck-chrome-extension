@@ -11,37 +11,27 @@ function padStep(nn) {
 }
 
 /**
+ * 步骤开始：message 须为业务动作说明（禁止「进入步骤」等空话）。
  * @param {number} tabId
  * @param {string} roundId
  * @param {string} stepKey 日志 step 字段，如 step04_jimeng_require_logged_in
  * @param {number} nn
+ * @param {string} actionRest `StepNN.` 之后正文，如 `检查各 frame 是否已登录`
  */
-export function logStepEnter(tabId, roundId, stepKey, nn) {
-  const p = padStep(nn);
-  appendLog(tabId, {
-    ts: Date.now(),
-    roundId,
-    step: stepKey,
-    level: 'info',
-    message: `Step${p}.进入步骤`,
-  });
+export function logStepEnter(tabId, roundId, stepKey, nn, actionRest) {
+  logStepInfo(tabId, roundId, stepKey, nn, actionRest);
 }
 
 /**
+ * 步骤成功结束：message 须为业务结果说明（禁止「完成步骤」等空话）。
  * @param {number} tabId
  * @param {string} roundId
  * @param {string} stepKey
  * @param {number} nn
+ * @param {string} outcomeRest `StepNN.` 之后正文，如 `已确认已登录`
  */
-export function logStepDone(tabId, roundId, stepKey, nn) {
-  const p = padStep(nn);
-  appendLog(tabId, {
-    ts: Date.now(),
-    roundId,
-    step: stepKey,
-    level: 'info',
-    message: `Step${p}.完成步骤`,
-  });
+export function logStepDone(tabId, roundId, stepKey, nn, outcomeRest) {
+  logStepInfo(tabId, roundId, stepKey, nn, outcomeRest);
 }
 
 /**

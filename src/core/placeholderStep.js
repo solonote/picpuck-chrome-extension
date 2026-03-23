@@ -1,7 +1,7 @@
 /**
  * 占位步骤：MAIN 空跑一轮 + 标准进入 / 说明 / 完成日志。
  */
-import { logStepDone, logStepEnter, logStepInfo } from './stepLog.js';
+import { logStepInfo } from './stepLog.js';
 
 /**
  * @param {{ tabId: number, roundId: string }} ctx
@@ -15,7 +15,7 @@ export async function runPlaceholderMainStep(ctx, opts) {
     world: 'MAIN',
     func: () => {},
   });
-  logStepEnter(tabId, roundId, stepKey, nn);
+  logStepInfo(tabId, roundId, stepKey, nn, '开始执行占位 MAIN 注入');
   logStepInfo(tabId, roundId, stepKey, nn, bodyRest);
-  logStepDone(tabId, roundId, stepKey, nn);
+  logStepInfo(tabId, roundId, stepKey, nn, '占位步骤已结束');
 }
