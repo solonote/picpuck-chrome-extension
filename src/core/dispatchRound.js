@@ -29,7 +29,19 @@ export async function dispatchRound(args) {
     return { phase: 'error' };
   }
 
-  const ctx = { tabId, roundId, command, clientRequestId, payload };
+  /**
+   * Gemini：`step07_gemini_apply_effective_prompt_on_context` 写入 `effectivePrompt`，
+   * `step09_gemini_fill_input_and_paste_images` 读取（设计 §5.1 / §11.1）。
+   * @type {{ tabId: number, roundId: string, command: string, clientRequestId: string, payload: Record<string, unknown>, effectivePrompt?: string }}
+   */
+  const ctx = {
+    tabId,
+    roundId,
+    command,
+    clientRequestId,
+    payload,
+    effectivePrompt: undefined,
+  };
 
   const c = getOrCreateRoundContext(tabId);
   c.roundId = roundId;
