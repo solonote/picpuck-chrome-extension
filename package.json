@@ -1,0 +1,20 @@
+{
+  "name": "picpuck-chrome-extension",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PicPuck 受控 Chrome 扩展（core / agents 分层）",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint .",
+    "verify:phase0": "node scripts/verify-phase0.mjs",
+    "verify:phase1": "node scripts/verify-phase1.mjs",
+    "verify:phase2": "node scripts/verify-phase2.mjs",
+    "verify:phase3": "node scripts/verify-phase3.mjs",
+    "verify:phase5-static": "node scripts/verify-phase5-static.mjs",
+    "verify:all": "npm run lint && npm run verify:phase0 && npm run verify:phase1 && npm run verify:phase2 && npm run verify:phase3 && npm run verify:phase5-static"
+  },
+  "devDependencies": {
+    "eslint": "^9.16.0",
+    "globals": "^15.13.0"
+  }
+}
