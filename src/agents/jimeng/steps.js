@@ -3,7 +3,6 @@
  */
 import { executeInAllFrames } from '../../core/executeAllFrames.js';
 import { scrollTopViaInjectMain } from '../../core/mainWorldScrollTop.js';
-import { runPlaceholderMainStep } from '../../core/placeholderStep.js';
 import { logStepDone, logStepEnter, logStepFail, logStepInfo } from '../../core/stepLog.js';
 import { waitForTabUrlWhen } from '../../core/waitTabUrl.js';
 import {
@@ -19,6 +18,17 @@ function payloadString(payload, key) {
   if (!payload || typeof payload !== 'object') return '';
   const v = payload[key];
   return typeof v === 'string' ? v : '';
+}
+
+function payloadImages(payload) {
+  if (!payload || typeof payload !== 'object') return [];
+  const v = payload.images;
+  if (!Array.isArray(v)) return [];
+  return v.filter((x) => typeof x === 'string');
+}
+
+function payloadFillOnly(payload) {
+  return !!(payload && typeof payload === 'object' && payload.fillOnly);
 }
 
 async function ensureJimengImageMainWorldInjected(tabId) {
@@ -171,17 +181,6 @@ export async function step05_jimeng_ensure_ai_tool_home(ctx) {
   logStepDone(tabId, roundId, stepKey, 5);
 }
 
-/**
- * 占位步骤：后续替换为真实 DOM 操作并遵守 §3.3 日志。
- */
-export async function step06_jimeng_fill_placeholder(ctx) {
-  await runPlaceholderMainStep(ctx, {
-    stepKey: 'step06_jimeng_fill_placeholder',
-    nn: 6,
-    bodyRest: '占位步骤+尚未对接即梦页面表单',
-  });
-}
-
 /** 设计 §4.1.2：工作台就绪（仅 hasForm 链，不切换模式/模型） */
 export async function step07_jimeng_ensure_workbench_ready(ctx) {
   await execJimengMainRunner(ctx, {
@@ -241,5 +240,94 @@ export async function step11_jimeng_ensure_ratio_resolution(ctx) {
       resolutionLabel: payloadString(payload, 'resolutionLabel'),
     },
     failUserMsg: '动作失败+无法设置画幅或分辨率',
+  });
+}
+
+/** 清空提示词并移除页面已有参考图（两条固定 Step12 info 在 MAIN） */
+export async function step12_jimeng_clear_form(ctx) {
+  await execJimengMainRunner(ctx, {
+    nn: 12,
+    stepKey: 'step12_jimeng_clear_form',
+    runnerName: 'runStep12ClearForm',
+    mainPayload: {},
+    failUserMsg: '动作失败+未找到即梦提示词区域或无法清空',
+  });
+}
+
+/** 有配图：逐张贴参考图后双次硬清空；无配图：SW 记 Step13 跳过 */
+export async function step13_jimeng_paste_reference_clear_prompt(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step13_jimeng_paste_reference_clear_prompt';
+  const images = payloadImages(payload);
+  if (images.length === 0) {
+    logStepEnter(tabId, roundId, stepKey, 13);
+    logStepInfo(tabId, roundId, stepKey, 13, 'Step13.本步跳过');
+    logStepDone(tabId, roundId, stepKey, 13);
+    return;
+  }
+  await execJimengMainRunner(ctx, {
+    nn: 13,
+    stepKey,
+    runnerName: 'runStep13PasteReferenceClearPrompt',
+    mainPayload: { images },
+    failUserMsg: '动作失败+即梦参考图粘贴或清空失败',
+  });
+}
+
+/** 写入用户提示词（含占位符文案） */
+export async function step14_jimeng_fill_prompt_text(ctx) {
+  const { payload } = ctx;
+  await execJimengMainRunner(ctx, {
+    nn: 14,
+    stepKey: 'step14_jimeng_fill_prompt_text',
+    runnerName: 'runStep14FillPromptText',
+    mainPayload: { prompt: payloadString(payload, 'prompt') },
+    failUserMsg: '动作失败+无法写入即梦提示词',
+  });
+}
+
+/** 有配图：将 (参考图片N) 换为 @ 并选「图片N」；无配图：跳过 */
+export async function step15_jimeng_expand_at_mentions(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step15_jimeng_expand_at_mentions';
+  const images = payloadImages(payload);
+  if (images.length === 0) {
+    logStepEnter(tabId, roundId, stepKey, 15);
+    logStepInfo(tabId, roundId, stepKey, 15, 'Step15.本步跳过');
+    logStepDone(tabId, roundId, stepKey, 15);
+    return;
+  }
+  await execJimengMainRunner(ctx, {
+    nn: 15,
+    stepKey,
+    runnerName: 'runStep15ExpandAtMentions',
+    mainPayload: {
+      prompt: payloadString(payload, 'prompt'),
+      images,
+    },
+    failUserMsg: '动作失败+即梦 @ 参考图或占位符校验失败',
+  });
+}
+
+/** 同步 body 登录标记（对齐旧版 setLoggedInFlag） */
+export async function step16_jimeng_set_logged_in_marker(ctx) {
+  await execJimengMainRunner(ctx, {
+    nn: 16,
+    stepKey: 'step16_jimeng_set_logged_in_marker',
+    runnerName: 'runStep16SetLoggedInMarker',
+    mainPayload: {},
+    failUserMsg: '动作失败+即梦页内状态标记失败',
+  });
+}
+
+/** fillOnly 时跳过点击生成 */
+export async function step17_jimeng_click_generate_if_needed(ctx) {
+  const { payload } = ctx;
+  await execJimengMainRunner(ctx, {
+    nn: 17,
+    stepKey: 'step17_jimeng_click_generate_if_needed',
+    runnerName: 'runStep17ClickGenerateIfNeeded',
+    mainPayload: { fillOnly: payloadFillOnly(payload) },
+    failUserMsg: '动作失败+无法点击即梦生成按钮',
   });
 }

@@ -466,11 +466,370 @@
     return { ok: true };
   }
 
+  function clearEditorHardOnTarget(target) {
+    var isTa0 = target.tagName === 'TEXTAREA';
+    if (isTa0) {
+      target.value = '';
+    } else {
+      try {
+        target.focus();
+        if (doc.execCommand) {
+          doc.execCommand('selectAll', false, null);
+          doc.execCommand('delete', false, null);
+        }
+      } catch (ec) {
+        /* ignore */
+      }
+    }
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+    var pin0 = doc.querySelector('input[class*="prompt-input"]');
+    if (pin0) {
+      pin0.value = '';
+      pin0.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
+
+  function insertPlainOnTarget(target, plain) {
+    var isTa = target.tagName === 'TEXTAREA';
+    var s = typeof plain === 'string' ? plain : '';
+    if (isTa) {
+      target.value = s;
+      return;
+    }
+    if (!s) return;
+    target.focus();
+    var inserted = false;
+    try {
+      inserted = doc.execCommand('insertText', false, s);
+    } catch (ei) {
+      /* ignore */
+    }
+    if (!inserted) {
+      try {
+        var dtT = new DataTransfer();
+        dtT.setData('text/plain', s);
+        target.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dtT }));
+      } catch (ep) {
+        /* ignore */
+      }
+    }
+  }
+
+  function pickNextJimengRefRemoveButton() {
+    var candidates = doc.querySelectorAll('[class*="remove-button"]');
+    var i;
+    var c;
+    var r;
+    for (i = 0; i < candidates.length; i++) {
+      c = candidates[i];
+      r = c.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) return c;
+    }
+    return candidates.length ? candidates[0] : null;
+  }
+
+  function selectTextInElement(rootEl, substring) {
+    if (!rootEl || !substring) return false;
+    var walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, null);
+    var node;
+    while ((node = walker.nextNode())) {
+      if (node.parentElement && node.parentElement.closest && node.parentElement.closest('[class*="prompt-editor-sizer"]')) {
+        continue;
+      }
+      var text = node.textContent || '';
+      var idx = text.indexOf(substring);
+      if (idx !== -1) {
+        var range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + substring.length);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        try {
+          rootEl.focus();
+        } catch (ef) {
+          /* ignore */
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function clickJimengReferenceOption(imageNum) {
+    var popup = doc.querySelector('.lv-select-popup');
+    var options = popup ? popup.querySelectorAll('li[role="option"]') : [];
+    for (var oi = 0; oi < options.length; oi++) {
+      var li = options[oi];
+      var mm = (li.textContent || '').match(/图片(\d+)/);
+      if (mm && parseInt(mm[1], 10) === imageNum) {
+        li.click();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** @param {{ roundId: string }} payload */
+  async function runStep12ClearForm(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step12_jimeng_clear_form';
+    var target = findJimengPromptField();
+    if (!target) {
+      appendMainLog(roundId, stepKey, 'info', 'Step12.动作失败+未找到提示词输入区域');
+      return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
+    }
+    target.focus();
+    appendMainLog(roundId, stepKey, 'info', 'Step12.清空提示词');
+    clearEditorHardOnTarget(target);
+    appendMainLog(roundId, stepKey, 'info', 'Step12.移除参考图');
+    var removeCount = 0;
+    var removeRefMaxClicks = 80;
+    while (true) {
+      var btn = pickNextJimengRefRemoveButton();
+      if (!btn) break;
+      if (removeCount >= removeRefMaxClicks) break;
+      removeCount++;
+      try {
+        btn.click();
+      } catch (eRm) {
+        appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.removeErr ' + (eRm && eRm.message));
+      }
+      await delay(320);
+    }
+    return { ok: true };
+  }
+
+  var PASTE_GAP_MS = 1000;
+  var BEFORE_FIRST_PASTE_MS = 500;
+  var AFTER_LAST_PASTE_SETTLE_MS = 1200;
+  var POPUP_WAIT_MS_AT = 550;
+  var AFTER_OPTION_MS_AT = 450;
+
+  /** @param {{ roundId: string, images?: string[] }} payload */
+  async function runStep13PasteReferenceClearPrompt(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step13_jimeng_paste_reference_clear_prompt';
+    var images = payload && Array.isArray(payload.images) ? payload.images : [];
+    if (images.length === 0) {
+      return { ok: true, skipped: true };
+    }
+    var inj = g.__idlinkPicpuckInject;
+    if (!inj || typeof inj.dataUrlToBlob !== 'function' || typeof inj.collectJimengReferenceFileInputs !== 'function') {
+      return { ok: false, code: 'JIMENG_PAGE_HELPERS_MISSING' };
+    }
+    var target = findJimengPromptField();
+    if (!target) {
+      return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
+    }
+    target.focus();
+    await delay(BEFORE_FIRST_PASTE_MS);
+    var sizes = [];
+    var failIdx = [];
+    var idx;
+    for (idx = 0; idx < images.length; idx++) {
+      var blob = inj.dataUrlToBlob(images[idx]);
+      if (!blob) {
+        failIdx.push(idx);
+        appendMainLog(roundId, stepKey, 'debug', 'Step13.debug.dataUrlToBlobFail idx=' + idx);
+        await delay(PASTE_GAP_MS);
+        continue;
+      }
+      sizes.push(blob.size);
+      var fi = inj.imageFileFromBlob(blob, idx + 1);
+      var fileOne = fi.file;
+      var fileType = fi.fileType;
+      var dtOne = new DataTransfer();
+      dtOne.items.add(fileOne);
+      appendMainLog(roundId, stepKey, 'debug', 'Step13.debug.paste idx=' + idx + ' ' + inj.jimengPasteBrief(images[idx], blob, fileOne));
+
+      var slotInputs = inj.collectJimengReferenceFileInputs(doc);
+      var fileInp = slotInputs.length > idx ? slotInputs[idx] : slotInputs[0];
+      if (fileInp) {
+        try {
+          var dtFile = new DataTransfer();
+          dtFile.items.add(fileOne);
+          fileInp.files = dtFile.files;
+          fileInp.dispatchEvent(new Event('change', { bubbles: true }));
+          appendMainLog(roundId, stepKey, 'debug', 'Step13.debug.fileInput idx=' + idx + ' slots=' + slotInputs.length);
+          await delay(PASTE_GAP_MS);
+          continue;
+        } catch (ef) {
+          appendMainLog(roundId, stepKey, 'debug', 'Step13.debug.fileInputErr ' + (ef && ef.message));
+        }
+      }
+
+      if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+        var clipMap = {};
+        clipMap[fileType] = blob;
+        try {
+          await navigator.clipboard.write([new ClipboardItem(clipMap)]);
+          target.focus();
+          var execOk = false;
+          try {
+            execOk = document.execCommand('paste');
+          } catch (ex) {
+            /* ignore */
+          }
+          appendMainLog(roundId, stepKey, 'debug', 'Step13.debug.clipboardPaste idx=' + idx + ' execOk=' + execOk);
+        } catch (err) {
+          appendMainLog(roundId, stepKey, 'debug', 'Step13.debug.clipboardWriteFail ' + (err && err.message));
+          try {
+            target.focus();
+            target.dispatchEvent(new ClipboardEvent('paste', { bubbles: false, cancelable: true, clipboardData: dtOne }));
+          } catch (e1) {
+            appendMainLog(roundId, stepKey, 'debug', 'Step13.debug.syntheticPasteErr ' + (e1 && e1.message));
+          }
+        }
+        await delay(PASTE_GAP_MS);
+        continue;
+      }
+
+      try {
+        target.focus();
+        target.dispatchEvent(new ClipboardEvent('paste', { bubbles: false, cancelable: true, clipboardData: dtOne }));
+      } catch (e2) {
+        /* ignore */
+      }
+      await delay(PASTE_GAP_MS);
+    }
+    appendMainLog(
+      roundId,
+      stepKey,
+      'debug',
+      'Step13.debug.sequentialDone bytes=' + JSON.stringify(sizes) + ' failIdx=[' + failIdx.join(',') + ']',
+    );
+    await delay(AFTER_LAST_PASTE_SETTLE_MS);
+    clearEditorHardOnTarget(target);
+    await delay(250);
+    clearEditorHardOnTarget(target);
+    return { ok: true };
+  }
+
+  /** @param {{ roundId: string, prompt?: string }} payload */
+  async function runStep14FillPromptText(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step14_jimeng_fill_prompt_text';
+    var target = findJimengPromptField();
+    if (!target) {
+      appendMainLog(roundId, stepKey, 'info', 'Step14.动作失败+未找到提示词输入区域');
+      return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
+    }
+    var prompt = typeof payload.prompt === 'string' ? payload.prompt : '';
+    target.focus();
+    var isTa = target.tagName === 'TEXTAREA';
+    if (isTa) {
+      target.value = prompt;
+    } else if (!prompt) {
+      clearEditorHardOnTarget(target);
+    } else {
+      insertPlainOnTarget(target, prompt);
+    }
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+    return { ok: true };
+  }
+
+  /** @param {{ roundId: string, prompt?: string, images?: string[] }} payload */
+  async function runStep15ExpandAtMentions(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step15_jimeng_expand_at_mentions';
+    var images = payload && Array.isArray(payload.images) ? payload.images : [];
+    if (images.length === 0) {
+      appendMainLog(roundId, stepKey, 'info', 'Step15.本步跳过');
+      return { ok: true, skipped: true };
+    }
+    var prompt = typeof payload.prompt === 'string' ? payload.prompt : '';
+    var v;
+    for (v = 1; v <= images.length; v++) {
+      var needTok = '(参考图片' + v + ')';
+      if (prompt.indexOf(needTok) === -1) {
+        appendMainLog(roundId, stepKey, 'info', 'Step15.动作失败+提示词缺少占位符');
+        return { ok: false, code: 'JIMENG_PROMPT_PLACEHOLDER_MISMATCH' };
+      }
+    }
+    var target = findJimengPromptField();
+    if (!target) {
+      return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
+    }
+    var isTa = target.tagName === 'TEXTAREA';
+    if (isTa) {
+      appendMainLog(roundId, stepKey, 'debug', 'Step15.debug.textareaSkipAt');
+      return { ok: true };
+    }
+    var maxIter = 120;
+    var iter = 0;
+    while (iter < maxIter) {
+      iter++;
+      var inner = target.innerText || target.textContent || '';
+      var m = inner.match(/\(参考图片(\d+)\)/);
+      if (!m) {
+        return { ok: true };
+      }
+      var token = m[0];
+      var n = parseInt(m[1], 10);
+      if (!selectTextInElement(target, token)) {
+        return { ok: true };
+      }
+      var insAt = false;
+      try {
+        insAt = doc.execCommand('insertText', false, '@');
+      } catch (eAt) {
+        /* ignore */
+      }
+      if (!insAt) {
+        return { ok: true };
+      }
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+      await delay(POPUP_WAIT_MS_AT);
+      var clicked = clickJimengReferenceOption(n);
+      appendMainLog(roundId, stepKey, 'debug', 'Step15.debug.refOption n=' + n + ' ok=' + clicked);
+      await delay(AFTER_OPTION_MS_AT);
+    }
+    return { ok: true };
+  }
+
+  /** @param {{ roundId: string }} payload */
+  async function runStep16SetLoggedInMarker(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step16_jimeng_set_logged_in_marker';
+    try {
+      var hasPersonal = !!(doc.getElementById('Personal') || (doc.querySelector && doc.querySelector('[id="Personal"]')));
+      if (doc.body) doc.body.setAttribute('data-idlink-jimeng-logged-in', hasPersonal ? '1' : '0');
+    } catch (e) {
+      appendMainLog(roundId, stepKey, 'debug', 'Step16.debug.err ' + (e && e.message));
+    }
+    return { ok: true };
+  }
+
+  /** @param {{ roundId: string, fillOnly?: boolean }} payload */
+  async function runStep17ClickGenerateIfNeeded(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step17_jimeng_click_generate_if_needed';
+    var fillOnly = !!(payload && payload.fillOnly);
+    if (fillOnly) {
+      appendMainLog(roundId, stepKey, 'info', 'Step17.跳过生成按钮+fillOnly');
+      return { ok: true };
+    }
+    var genBtn = doc.querySelector('[class*="toolbar-actions"]');
+    genBtn = genBtn ? genBtn.querySelector('button[class*="lv-btn"]') : null;
+    var genClicked = clickWhenVisible(function () {
+      return genBtn;
+    });
+    appendMainLog(roundId, stepKey, 'debug', 'Step17.debug.clickGenerate=' + genClicked);
+    return { ok: true };
+  }
+
   g.__picpuckJimengImage = {
     runStep07EnsureWorkbenchReady: runStep07EnsureWorkbenchReady,
     runStep08CloseOpenPopovers: runStep08CloseOpenPopovers,
     runStep09EnsureModeImageGeneration: runStep09EnsureModeImageGeneration,
     runStep10EnsureModel: runStep10EnsureModel,
     runStep11EnsureRatioResolution: runStep11EnsureRatioResolution,
+    runStep12ClearForm: runStep12ClearForm,
+    runStep13PasteReferenceClearPrompt: runStep13PasteReferenceClearPrompt,
+    runStep14FillPromptText: runStep14FillPromptText,
+    runStep15ExpandAtMentions: runStep15ExpandAtMentions,
+    runStep16SetLoggedInMarker: runStep16SetLoggedInMarker,
+    runStep17ClickGenerateIfNeeded: runStep17ClickGenerateIfNeeded,
   };
 })();
