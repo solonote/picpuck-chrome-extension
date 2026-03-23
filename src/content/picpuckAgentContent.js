@@ -2,7 +2,7 @@
 /**
  * 内容脚本（隔离世界）：与页面共享 DOM，可改 `#picpuck-agent-topbar`；与 SW 用 runtime 消息通信。
  *
- * - §4.1：左「当前轮次」（三连击复制）+ 中「等待/执行中」提示 + 右 Step 摘要（右对齐，`title` 全文）
+ * - §4.1：左「当前轮次」（三连击）+ 中「等待/执行中」相对整条顶栏几何水平居中 + 右 Step 摘要（右对齐，`title` 全文）
  * - §4.2：600ms 内三次点击左侧 → 向 SW 索取日志 JSON 并写入剪贴板（含 session 快照，避免 SW 休眠丢日志）
  * - 与 PicPuck 前端：`IdlinkExtensionCommand` / `IdlinkExtensionCommandResult`（同 picpuckExtension.js）
  * - MAIN 世界若需写日志：先 `postMessage` 到本脚本，再转发 `LOG_APPEND`（见 picpuckBridge）
@@ -19,10 +19,48 @@
   const COPY_FLASH_COLOR = '#1a3d1a';
   const TRIPLE_CLICK_MS = 600;
 
+  /** 与顶栏根背景一致，左右区盖住中层文案边缘，避免与几何居中句叠读 */
+  const TOPBAR_SIDE_BG = 'rgba(20,20,24,.98)';
+
   /** @type {Set<string>} */
   const BUSY_PHASES = new Set(['received', 'clearing', 'running']);
 
   let clickTimes = [];
+
+  /**
+   * 中间提示相对整条顶栏几何水平居中（非「剩余 flex 区域」居中）。
+   * @param {HTMLElement} root
+   * @param {HTMLElement} left
+   * @param {HTMLElement} center
+   * @param {HTMLElement} right
+   */
+  function applyTopbarLayoutStyles(root, left, center, right) {
+    root.style.setProperty('justify-content', 'space-between');
+    root.style.setProperty('align-items', 'center');
+    left.style.cssText =
+      'flex:0 1 auto;max-width:42%;min-width:0;padding:4px 8px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;position:relative;z-index:2;background:' +
+      TOPBAR_SIDE_BG;
+    right.style.cssText =
+      'flex:0 1 auto;max-width:42%;min-width:0;padding:4px 8px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:right;position:relative;z-index:2;background:' +
+      TOPBAR_SIDE_BG;
+    center.style.cssText = [
+      'position:absolute',
+      'left:50%',
+      'top:50%',
+      'transform:translate(-50%,-50%)',
+      'z-index:1',
+      'max-width:min(92vw,calc(100vw - 200px))',
+      'padding:0 6px',
+      'box-sizing:border-box',
+      'pointer-events:none',
+      'text-align:center',
+      'white-space:nowrap',
+      'overflow:hidden',
+      'text-overflow:ellipsis',
+      'color:#b8bcc8',
+      'font-weight:500',
+    ].join(';');
+  }
 
   /** 若尚无根节点则创建；与 allocateTab 注入的裸根节点共存，仅补全左右子节点与样式 */
   function ensureTopbarShell() {
@@ -39,7 +77,8 @@
         'z-index:2147483646',
         'display:flex',
         'flex-direction:row',
-        'align-items:stretch',
+        'align-items:center',
+        'justify-content:space-between',
         'min-height:28px',
         'font:12px/1.4 system-ui,sans-serif',
         'background:rgba(20,20,24,.92)',
@@ -53,26 +92,21 @@
     if (!left) {
       left = document.createElement('div');
       left.setAttribute('data-picpuck-topbar-left', '1');
-      left.style.cssText =
-        'flex:0 0 24%;max-width:280px;min-width:120px;padding:4px 8px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;';
       root.appendChild(left);
     }
     let right = root.querySelector('[data-picpuck-topbar-right]');
     if (!right) {
       right = document.createElement('div');
       right.setAttribute('data-picpuck-topbar-right', '1');
-      right.style.cssText =
-        'flex:0 0 38%;max-width:45%;min-width:140px;padding:4px 8px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:right;';
       root.appendChild(right);
     }
     let center = root.querySelector('[data-picpuck-topbar-center]');
     if (!center) {
       center = document.createElement('div');
       center.setAttribute('data-picpuck-topbar-center', '1');
-      center.style.cssText =
-        'flex:1 1 auto;min-width:120px;padding:4px 10px;text-align:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#b8bcc8;font-weight:500;';
       root.insertBefore(center, right);
     }
+    applyTopbarLayoutStyles(root, left, center, right);
     return { root, left, center, right };
   }
 
