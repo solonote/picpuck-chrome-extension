@@ -1,5 +1,5 @@
 /**
- * 将 `RoundContext.phase` 与 `lastInfoMessage` 推到内容脚本，驱动 §4.1 顶栏左右文案。
+ * 将 `RoundContext.phase` 与 `lastInfoMessage` 推到内容脚本，驱动顶栏三栏：左轮次、中等待/执行、右 Step 摘要。
  * 注意：`phase`（多状态）与根节点 `data-picpuck-exec-state`（仅 idle/running）语义不同。
  */
 import { getContext } from './roundContext.js';

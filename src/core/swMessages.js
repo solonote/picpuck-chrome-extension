@@ -8,6 +8,7 @@ import { masterDispatch } from './masterDispatch.js';
 import { appendLog, getContext } from './roundContext.js';
 import { getSinkRoundForTab } from './logSink.js';
 import { pushRoundPhaseUi } from './phaseUi.js';
+import { loadLogsForCopy } from './roundLogSnapshot.js';
 
 /** 与 `frontend-v2/src/utils/picpuckExtension.js` 中 PICPUCK_EXTENSION_COMMAND 一致 */
 const PAGE_CMD_TYPE = 'IdlinkExtensionCommand';
@@ -52,10 +53,15 @@ export function installRuntimeMessageHandlers() {
           sendResponse({ ok: false, error: 'no tab' });
           return;
         }
-        const logs = getContext(tabId)?.logs ?? [];
-        const sorted = [...logs].sort((a, b) => a.ts - b.ts);
-        sendResponse({ ok: true, logs: sorted });
-        return;
+        (async () => {
+          const logs = await loadLogsForCopy(tabId);
+          const sorted = [...logs].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+          sendResponse({ ok: true, logs: sorted });
+        })().catch((e) => {
+          const m = e instanceof Error ? e.message : String(e);
+          sendResponse({ ok: false, error: m });
+        });
+        return true;
       }
 
       (async () => {

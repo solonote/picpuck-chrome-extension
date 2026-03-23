@@ -6,6 +6,7 @@ import { getOrCreateRoundContext, appendLog, updatePhase, getContext } from './r
 import { releaseExecSlot } from './releaseExecSlot.js';
 import { inFlightByTabId, roundBinding } from './taskBindings.js';
 import { detachLogSink } from './logSink.js';
+import { persistRoundLogsSnapshot } from './roundLogSnapshot.js';
 import { pushRoundPhaseUi } from './phaseUi.js';
 import {
   frameworkStep01_clearRoundLogs,
@@ -97,6 +98,12 @@ export async function dispatchRound(args) {
     updatePhase(tabId, 'error');
     await pushRoundPhaseUi(tabId, roundId);
   } finally {
+    // worker 休眠后内存日志会丢；快照供顶栏三连击复制仍可取上一轮日志
+    try {
+      await persistRoundLogsSnapshot(tabId);
+    } catch (e) {
+      console.warn('[PicPuck] persistRoundLogsSnapshot in finally tab=%d', tabId, e);
+    }
     // §5.1 第 4 步：无论成功失败，释放顶栏执行槽并清理进行中映射（与 PicPuck 响应在 masterDispatch 侧同回合结束）
     await releaseExecSlot(tabId);
     inFlightByTabId.delete(tabId);

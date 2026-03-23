@@ -2,8 +2,8 @@
 /**
  * 内容脚本（隔离世界）：与页面共享 DOM，可改 `#picpuck-agent-topbar`；与 SW 用 runtime 消息通信。
  *
- * - §4.1：左约 40% 状态区 + 右 lastInfo（`title` 展示全文）；`data-picpuck-exec-state` 由 §9.3 在 MAIN 世界维护
- * - §4.2：600ms 内三次点击左侧 → 向 SW 索取日志 JSON 并写入剪贴板
+ * - §4.1：左「当前轮次」（三连击复制）+ 中「等待/执行中」提示 + 右 Step 摘要（右对齐，`title` 全文）
+ * - §4.2：600ms 内三次点击左侧 → 向 SW 索取日志 JSON 并写入剪贴板（含 session 快照，避免 SW 休眠丢日志）
  * - 与 PicPuck 前端：`IdlinkExtensionCommand` / `IdlinkExtensionCommandResult`（同 picpuckExtension.js）
  * - MAIN 世界若需写日志：先 `postMessage` 到本脚本，再转发 `LOG_APPEND`（见 picpuckBridge）
  */
@@ -18,6 +18,9 @@
   const COPY_FLASH_MS = 300;
   const COPY_FLASH_COLOR = '#1a3d1a';
   const TRIPLE_CLICK_MS = 600;
+
+  /** @type {Set<string>} */
+  const BUSY_PHASES = new Set(['received', 'clearing', 'running']);
 
   let clickTimes = [];
 
@@ -51,7 +54,7 @@
       left = document.createElement('div');
       left.setAttribute('data-picpuck-topbar-left', '1');
       left.style.cssText =
-        'width:40%;flex:0 0 40%;padding:4px 8px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;';
+        'flex:0 0 24%;max-width:280px;min-width:120px;padding:4px 8px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;';
       root.appendChild(left);
     }
     let right = root.querySelector('[data-picpuck-topbar-right]');
@@ -59,18 +62,29 @@
       right = document.createElement('div');
       right.setAttribute('data-picpuck-topbar-right', '1');
       right.style.cssText =
-        'flex:1;min-width:0;padding:4px 8px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;';
+        'flex:0 0 38%;max-width:45%;min-width:140px;padding:4px 8px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:right;';
       root.appendChild(right);
     }
-    return { root, left, right };
+    let center = root.querySelector('[data-picpuck-topbar-center]');
+    if (!center) {
+      center = document.createElement('div');
+      center.setAttribute('data-picpuck-topbar-center', '1');
+      center.style.cssText =
+        'flex:1 1 auto;min-width:120px;padding:4px 10px;text-align:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#b8bcc8;font-weight:500;';
+      root.insertBefore(center, right);
+    }
+    return { root, left, center, right };
   }
 
   function applyRoundPhase(payload) {
-    const { left, right } = ensureTopbarShell();
+    const { left, center, right } = ensureTopbarShell();
     const phase = payload && payload.phase != null ? String(payload.phase) : 'idle';
     const roundShort = payload && payload.roundIdShort != null ? String(payload.roundIdShort) : '—';
     const lastInfo = payload && payload.lastInfoMessage != null ? String(payload.lastInfoMessage) : '';
     left.textContent = '当前轮次 ' + roundShort + ' · ' + phase;
+    center.textContent = BUSY_PHASES.has(phase)
+      ? 'PicPuck Agent 正在执行任务，请勿进行操作'
+      : 'PicPuck Agent 等待新的任务';
     right.textContent = lastInfo;
     right.setAttribute('title', lastInfo);
   }
@@ -83,21 +97,42 @@
     }, COPY_FLASH_MS);
   }
 
-  /** §4.2：导出前再按 ts 升序排序，与 SW 侧 RoundContext 约定一致 */
+  function copyTextFallback(text, onOk) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      (document.body || document.documentElement).appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      if (ta.parentNode) ta.parentNode.removeChild(ta);
+      if (ok) onOk();
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  /** §4.2：导出前再按 ts 升序排序，与 SW 侧 RoundContext / 快照约定一致 */
   function requestLogsAndCopy(leftEl) {
     chrome.runtime.sendMessage(
       { type: PICPUCK_COMMAND, payload: { type: PAGE_CMD, action: '__picpuckCopyLogs' } },
       (res) => {
-        if (chrome.runtime.lastError || !res || !res.ok || !Array.isArray(res.logs)) {
+        if (chrome.runtime.lastError) {
+          return;
+        }
+        if (!res || !res.ok || !Array.isArray(res.logs)) {
           return;
         }
         const sorted = [...res.logs].sort((a, b) => (a.ts || 0) - (b.ts || 0));
         const text = JSON.stringify(sorted);
+        const done = () => flashCopySuccess(leftEl);
         if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text).then(
-            () => flashCopySuccess(leftEl),
-            () => {},
-          );
+          navigator.clipboard.writeText(text).then(done, () => copyTextFallback(text, done));
+        } else {
+          copyTextFallback(text, done);
         }
       },
     );
@@ -156,13 +191,16 @@
     });
   });
 
+  const idlePayload = { phase: 'idle', roundIdShort: '—', lastInfoMessage: '' };
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
       ensureTopbarShell();
+      applyRoundPhase(idlePayload);
       wireLeftClick();
     });
   } else {
     ensureTopbarShell();
+    applyRoundPhase(idlePayload);
     wireLeftClick();
   }
 })();
