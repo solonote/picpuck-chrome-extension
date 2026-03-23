@@ -28,6 +28,32 @@
   let clickTimes = [];
 
   /**
+   * 扩展重载/更新后旧内容脚本的 `chrome.runtime` 会失效，任何访问都可能抛 Extension context invalidated。
+   */
+  function extensionRuntimeOk() {
+    try {
+      return !!(typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * @param {unknown} message
+   * @param {(response: unknown) => void} [responseCallback]
+   */
+  function safeRuntimeSendMessage(message, responseCallback) {
+    if (!extensionRuntimeOk()) return;
+    try {
+      chrome.runtime.sendMessage(message, responseCallback);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      if (m.indexOf('Extension context invalidated') !== -1) return;
+      throw e;
+    }
+  }
+
+  /**
    * 中间提示相对整条顶栏几何水平居中（非「剩余 flex 区域」居中）。
    * @param {HTMLElement} root
    * @param {HTMLElement} left
@@ -151,25 +177,26 @@
 
   /** §4.2：导出前再按 ts 升序排序，与 SW 侧 RoundContext / 快照约定一致 */
   function requestLogsAndCopy(leftEl) {
-    chrome.runtime.sendMessage(
-      { type: PICPUCK_COMMAND, payload: { type: PAGE_CMD, action: '__picpuckCopyLogs' } },
-      (res) => {
-        if (chrome.runtime.lastError) {
-          return;
-        }
-        if (!res || !res.ok || !Array.isArray(res.logs)) {
-          return;
-        }
-        const sorted = [...res.logs].sort((a, b) => (a.ts || 0) - (b.ts || 0));
-        const text = JSON.stringify(sorted);
-        const done = () => flashCopySuccess(leftEl);
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text).then(done, () => copyTextFallback(text, done));
-        } else {
-          copyTextFallback(text, done);
-        }
-      },
-    );
+    safeRuntimeSendMessage({ type: PICPUCK_COMMAND, payload: { type: PAGE_CMD, action: '__picpuckCopyLogs' } }, (res) => {
+      let lastErr = '';
+      try {
+        lastErr = chrome.runtime.lastError ? String(chrome.runtime.lastError.message || '') : '';
+      } catch {
+        return;
+      }
+      if (lastErr) return;
+      if (!res || !res.ok || !Array.isArray(res.logs)) {
+        return;
+      }
+      const sorted = [...res.logs].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      const text = JSON.stringify(sorted);
+      const done = () => flashCopySuccess(leftEl);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, () => copyTextFallback(text, done));
+      } else {
+        copyTextFallback(text, done);
+      }
+    });
   }
 
   function onLeftClick(e) {
@@ -191,14 +218,21 @@
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg || typeof msg !== 'object') return;
+    const safeRespond = (obj) => {
+      try {
+        sendResponse(obj);
+      } catch {
+        /* Extension context invalidated 等 */
+      }
+    };
     if (msg.type === ROUND_PHASE) {
       applyRoundPhase(msg.payload);
       wireLeftClick();
-      sendResponse({ ok: true });
+      safeRespond({ ok: true });
       return;
     }
     if (msg.type === LOG_APPEND) {
-      sendResponse({ ok: true });
+      safeRespond({ ok: true });
     }
   });
 
@@ -207,11 +241,18 @@
     const d = event.data;
     // MAIN 世界无 chrome.*，由页面 postMessage 经此桥到 SW
     if (d && d.picpuckBridge === true && d.kind === 'LOG_APPEND' && d.entry) {
-      chrome.runtime.sendMessage({ type: LOG_APPEND, entry: d.entry });
+      safeRuntimeSendMessage({ type: LOG_APPEND, entry: d.entry });
       return;
     }
     if (!d || d.type !== PAGE_CMD) return;
-    chrome.runtime.sendMessage({ type: PICPUCK_COMMAND, payload: d }, (res) => {
+    safeRuntimeSendMessage({ type: PICPUCK_COMMAND, payload: d }, (res) => {
+      let lastErr = '';
+      try {
+        lastErr = chrome.runtime.lastError ? String(chrome.runtime.lastError.message || '') : '';
+      } catch {
+        return;
+      }
+      if (lastErr) return;
       const reply = {
         type: 'IdlinkExtensionCommandResult',
         action: d.action,
