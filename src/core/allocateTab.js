@@ -31,6 +31,7 @@ export async function allocateTab(command) {
     if (tab.id == null) continue;
     const got = await tryAcquireOnTab(tab.id);
     if (got.ok && got.acquired) {
+      await focusWorkTab(tab.id);
       return { ok: true, tabId: tab.id };
     }
   }
@@ -57,6 +58,7 @@ export async function allocateTab(command) {
   if (!got.ok || !got.acquired) {
     return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'acquire after create failed' };
   }
+  await focusWorkTab(created.id);
   return { ok: true, tabId: created.id };
 }
 
@@ -64,6 +66,22 @@ export async function allocateTab(command) {
  * @param {number} tabId
  * @returns {Promise<{ ok: boolean, acquired?: boolean, invalid?: boolean }>}
  */
+/**
+ * 复用已有 Tab 时默认留在后台；每轮分配成功后激活该 Tab 并聚焦其窗口（第二轮及以后与 PicPuck 页同屏）。
+ * @param {number} tabId
+ */
+async function focusWorkTab(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.windowId != null) {
+      await chrome.windows.update(tab.windowId, { focused: true });
+    }
+    await chrome.tabs.update(tabId, { active: true });
+  } catch (e) {
+    console.warn('[PicPuck] focusWorkTab failed tab=%d', tabId, e);
+  }
+}
+
 async function tryAcquireOnTab(tabId) {
   try {
     // 必须在 MAIN：与页面真实 DOM 上的 #picpuck-agent-topbar 为同一套节点（§9.3）
