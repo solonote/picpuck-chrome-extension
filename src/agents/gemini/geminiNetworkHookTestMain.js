@@ -67,23 +67,46 @@
         clone.arrayBuffer().then(function (buf) {
           logFetchResponse(absUrl, response, { kind: 'image', byteLength: buf.byteLength });
         });
-      } else if (/^application\/json/i.test(ct)) {
+      } else if (/^application\/json/i.test(ct) || /[?&]format=json\b/i.test(absUrl)) {
         clone
           .text()
           .then(function (t) {
-            logFetchResponse(absUrl, response, { kind: 'json', textLen: t.length, sample: t.slice(0, 300) });
+            var body = { kind: 'json', textLen: t.length, text: t.slice(0, 12000) };
+            try {
+              body.parsed = JSON.parse(t);
+            } catch (e1) {
+              body.parseError = String(e1 && e1.message ? e1.message : e1);
+            }
+            logFetchResponse(absUrl, response, body);
           })
           .catch(function () {
             logFetchResponse(absUrl, response, { kind: 'json', readFailed: true });
+          });
+      } else if (/^text\//i.test(ct)) {
+        clone
+          .text()
+          .then(function (t) {
+            logFetchResponse(absUrl, response, { kind: 'text', textLen: t.length, text: t.slice(0, 12000) });
+          })
+          .catch(function () {
+            logFetchResponse(absUrl, response, { kind: 'text', readFailed: true });
           });
       } else {
         clone
           .arrayBuffer()
           .then(function (buf) {
-            logFetchResponse(absUrl, response, { kind: 'other', byteLength: buf.byteLength, contentType: ct });
+            var info = { kind: 'binary', byteLength: buf.byteLength, contentType: ct };
+            if (buf.byteLength > 0 && buf.byteLength <= 65536) {
+              try {
+                info.utf8Preview = new TextDecoder('utf-8', { fatal: false }).decode(buf).slice(0, 12000);
+              } catch (e2) {
+                info.decodeNote = 'utf-8 decode failed';
+              }
+            }
+            logFetchResponse(absUrl, response, info);
           })
           .catch(function () {
-            logFetchResponse(absUrl, response, { kind: 'other', readFailed: true, contentType: ct });
+            logFetchResponse(absUrl, response, { kind: 'binary', readFailed: true, contentType: ct });
           });
       }
     } catch (e) {
@@ -149,7 +172,14 @@
       var rt = xhr.responseType;
       if (rt === '' || rt === 'text') {
         var t = xhr.responseText;
-        bodyInfo = { kind: 'text', length: t ? t.length : 0, sample: t ? t.slice(0, 300) : '' };
+        bodyInfo = { kind: 'text', textLen: t ? t.length : 0, text: t ? t.slice(0, 12000) : '' };
+        if (/[?&]format=json\b/i.test(absUrl) || /^application\/json/i.test(ct)) {
+          try {
+            bodyInfo.parsed = JSON.parse(t || '{}');
+          } catch (e3) {
+            bodyInfo.parseError = String(e3 && e3.message ? e3.message : e3);
+          }
+        }
       } else if (rt === 'arraybuffer' && xhr.response) {
         bodyInfo = { kind: 'arraybuffer', byteLength: xhr.response.byteLength };
       } else if (rt === 'blob' && xhr.response) {
