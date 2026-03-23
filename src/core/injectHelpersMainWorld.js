@@ -6,6 +6,17 @@
   var g = typeof globalThis !== 'undefined' ? globalThis : window;
   if (g.__idlinkPicpuckInject) return;
   g.__idlinkPicpuckInject = {
+    /** 页首对齐；与站点无关，供各 agent 经 MAIN 调用 */
+    scrollDocumentToTop: function () {
+      try {
+        window.scrollTo(0, 0);
+        if (document.documentElement) document.documentElement.scrollTop = 0;
+        if (document.body) document.body.scrollTop = 0;
+        if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
+      } catch (e) {
+        /* ignore */
+      }
+    },
     dataUrlToBlob: function (dataUrl) {
       if (!dataUrl || typeof dataUrl !== 'string') return null;
       var match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
