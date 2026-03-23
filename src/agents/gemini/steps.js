@@ -32,6 +32,19 @@ function payloadFillOnly(payload) {
   return !!(payload && typeof payload === 'object' && payload.fillOnly);
 }
 
+/** 熔炉页传入、随 step13 经 ARM 传到隔离世界，剪贴板成功后回传并记 GENERATION 事件 */
+function payloadGenerationEvent(payload) {
+  if (!payload || typeof payload !== 'object') return undefined;
+  const ge = payload.generationEvent;
+  if (!ge || typeof ge !== 'object') return undefined;
+  const projectId = typeof ge.projectId === 'string' ? ge.projectId.trim() : '';
+  const subjectType = typeof ge.subjectType === 'string' ? ge.subjectType.trim() : '';
+  const subjectId = typeof ge.subjectId === 'string' ? ge.subjectId.trim() : '';
+  const inputPrompt = typeof ge.inputPrompt === 'string' ? ge.inputPrompt : '';
+  if (!projectId || !subjectType || !subjectId) return undefined;
+  return { projectId, subjectType, subjectId, inputPrompt };
+}
+
 function normalizeAspectRatioId(raw) {
   if (raw == null || !String(raw).trim()) return '16:9';
   const s = String(raw)
@@ -327,7 +340,7 @@ export async function step13_gemini_download_full_image_to_clipboard(ctx) {
     nn: 13,
     stepKey,
     runnerName: 'runStep13GeminiDownloadFullImageToClipboard',
-    mainPayload: { captureTimeoutMs: 120000 },
+    mainPayload: { captureTimeoutMs: 120000, generationEvent: payloadGenerationEvent(payload) },
     failUserMsg: '动作失败+整图下载链或剪贴板写入失败',
     startMsg: '点击整图下载拦截响应并写入系统剪贴板',
     doneMsg: '整图已写入系统剪贴板',

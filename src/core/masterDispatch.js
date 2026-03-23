@@ -5,7 +5,7 @@ import { allocateTab } from './allocateTab.js';
 import { dispatchRound } from './dispatchRound.js';
 import { detachLogSink } from './logSink.js';
 import { releaseExecSlot } from './releaseExecSlot.js';
-import { inFlightByTabId, roundBinding } from './taskBindings.js';
+import { geminiRelayCallerTabByRoundId, inFlightByTabId, roundBinding } from './taskBindings.js';
 
 /**
  * @param {string} clientRequestId
@@ -13,7 +13,7 @@ import { inFlightByTabId, roundBinding } from './taskBindings.js';
  * @param {Record<string, unknown>} payload
  * @returns {Promise<{ ok: boolean, roundId: string, tabId: number, phase: string, errorCode?: string }>}
  */
-export async function masterDispatch(clientRequestId, command, payload) {
+export async function masterDispatch(clientRequestId, command, payload, callerTabId) {
   const roundId = crypto.randomUUID();
   // 工作 Tab：按 CommandRecord.homeUrl/taskBaseUrl 全量 query 后筛选并抢占或新建（core/allocateTab）
   const alloc = await allocateTab(command);
@@ -37,6 +37,13 @@ export async function masterDispatch(clientRequestId, command, payload) {
     createdAt: Date.now(),
   });
   inFlightByTabId.set(tabId, roundId);
+
+  if (command === 'GEMINI_IMAGE_FILL' && callerTabId != null && callerTabId > 0) {
+    geminiRelayCallerTabByRoundId.set(roundId, callerTabId);
+    setTimeout(() => {
+      geminiRelayCallerTabByRoundId.delete(roundId);
+    }, 12 * 60 * 1000);
+  }
 
   try {
     const dr = await dispatchRound({ clientRequestId, command, tabId, roundId, payload });

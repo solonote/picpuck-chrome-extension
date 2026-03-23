@@ -13,6 +13,8 @@
   const ROUND_PHASE = 'ROUND_PHASE';
 
   const PAGE_CMD = 'IdlinkExtensionCommand';
+  /** 与 swMessages 中 `tabs.sendMessage` 的 type 一致：SW → 熔炉页 CS → window.postMessage */
+  const PICPUCK_GEMINI_GENERATED_IMAGE = 'PICPUCK_GEMINI_GENERATED_IMAGE';
 
   const TOPBAR_ID = 'picpuck-agent-topbar';
   const COPY_FLASH_MS = 300;
@@ -69,6 +71,36 @@
    * @param {ArrayBuffer} buf
    * @param {string} contentType
    */
+  /**
+   * 将整图 base64 经 SW 转发回发起 Gemini 命令的 PicPuck 标签页，供熔炉上传并记 GENERATION 事件。
+   */
+  function relayGeminiFullImageToCallerTab(buf, contentType, roundId, generationEvent) {
+    if (!extensionRuntimeOk() || !roundId || !generationEvent) return;
+    try {
+      if (!(buf instanceof ArrayBuffer)) return;
+      var u8 = new Uint8Array(buf);
+      var CH = 0x8000;
+      var bin = '';
+      for (var i = 0; i < u8.length; i += CH) {
+        bin += String.fromCharCode.apply(null, u8.subarray(i, Math.min(i + CH, u8.length)));
+      }
+      var imageBase64 = btoa(bin);
+      var ct = typeof contentType === 'string' && contentType ? contentType.split(';')[0].trim() : 'image/png';
+      safeRuntimeSendMessage({
+        type: PICPUCK_COMMAND,
+        payload: {
+          action: '__picpuckGeminiRelayGeneratedImage',
+          roundId: roundId,
+          imageBase64: imageBase64,
+          contentType: ct,
+          generationEvent: generationEvent,
+        },
+      });
+    } catch (e) {
+      console.warn('[PicPuck] relayGeminiFullImageToCallerTab failed', e);
+    }
+  }
+
   async function writeImageBufferToSystemClipboard(buf, contentType) {
     await focusThisTabForClipboardWrite();
     let mime = typeof contentType === 'string' ? contentType.split(';')[0].trim().toLowerCase() : '';
@@ -301,6 +333,23 @@
         /* Extension context invalidated 等 */
       }
     };
+    if (msg.type === PICPUCK_GEMINI_GENERATED_IMAGE) {
+      try {
+        window.postMessage(
+          {
+            type: 'IdlinkExtensionGeminiGeneratedImage',
+            imageBase64: msg.imageBase64,
+            contentType: msg.contentType,
+            generationEvent: msg.generationEvent,
+          },
+          window.location.origin,
+        );
+        safeRespond({ ok: true });
+      } catch (e) {
+        safeRespond({ ok: false });
+      }
+      return;
+    }
     if (msg.type === ROUND_PHASE) {
       applyRoundPhase(msg.payload);
       wireLeftClick();
@@ -323,6 +372,9 @@
     /** MAIN 先发 ARM，本处挂上 BUFFER 专用监听后再 ARM_READY，避免 BUFFER 早于监听 */
     if (d && d.picpuckBridge === true && d.kind === 'GEMINI_FULL_IMAGE_CLIPBOARD_ARM') {
       removeGeminiClipboardBufferListener();
+      const relayRoundId = typeof d.roundId === 'string' ? d.roundId : '';
+      const relayGen =
+        d.generationEvent && typeof d.generationEvent === 'object' ? d.generationEvent : null;
       geminiClipboardBufferListener = function onGeminiFullImageBuffer(event) {
         if (event.source !== window) return;
         const p = event.data;
@@ -332,12 +384,22 @@
         (async () => {
           let ok = false;
           let err = '';
+          let bufForRelay = null;
+          let ctForRelay = 'image/png';
           try {
             const buf = p._buffer;
             if (!(buf instanceof ArrayBuffer)) {
               throw new Error('剪贴板数据不是 ArrayBuffer');
             }
             const ctRaw = typeof p.contentType === 'string' && p.contentType ? p.contentType : 'image/png';
+            ctForRelay = ctRaw;
+            if (relayGen && relayRoundId) {
+              try {
+                bufForRelay = buf.slice(0);
+              } catch (eCopy) {
+                bufForRelay = null;
+              }
+            }
             await writeImageBufferToSystemClipboard(buf, ctRaw);
             ok = true;
           } catch (e) {
@@ -352,6 +414,9 @@
             },
             window.location.origin,
           );
+          if (ok && bufForRelay && relayGen && relayRoundId) {
+            relayGeminiFullImageToCallerTab(bufForRelay, ctForRelay, relayRoundId, relayGen);
+          }
         })();
       };
       window.addEventListener('message', geminiClipboardBufferListener);

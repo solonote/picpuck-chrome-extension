@@ -461,8 +461,11 @@
     }
   }
 
-  /** 与内容脚本握手：先挂上 BUFFER 临时监听并 ARM_READY，再 arm/点击，避免 BUFFER 早于监听入队 */
-  function waitGeminiClipboardArmReady() {
+  /**
+   * 与内容脚本握手：先挂上 BUFFER 临时监听并 ARM_READY，再 arm/点击，避免 BUFFER 早于监听入队。
+   * @param {{ roundId?: string, generationEvent?: Record<string, unknown> }} [relayMeta] 剪贴板成功后回传熔炉页记 GENERATION 事件用
+   */
+  function waitGeminiClipboardArmReady(relayMeta) {
     return new Promise(function (resolve, reject) {
       var armAckMs = 5000;
       var t = setTimeout(function () {
@@ -479,7 +482,17 @@
       }
       window.addEventListener('message', onAck);
       try {
-        window.postMessage({ picpuckBridge: true, kind: 'GEMINI_FULL_IMAGE_CLIPBOARD_ARM' }, window.location.origin);
+        var rid = relayMeta && relayMeta.roundId ? String(relayMeta.roundId) : '';
+        var ge = relayMeta && relayMeta.generationEvent && typeof relayMeta.generationEvent === 'object' ? relayMeta.generationEvent : undefined;
+        window.postMessage(
+          {
+            picpuckBridge: true,
+            kind: 'GEMINI_FULL_IMAGE_CLIPBOARD_ARM',
+            roundId: rid,
+            generationEvent: ge,
+          },
+          window.location.origin,
+        );
       } catch (ePost) {
         clearTimeout(t);
         window.removeEventListener('message', onAck);
@@ -498,7 +511,10 @@
       return { ok: false, code: 'GEMINI_FETCH_CAPTURE_MISSING' };
     }
     try {
-      await waitGeminiClipboardArmReady();
+      await waitGeminiClipboardArmReady({
+        roundId: roundId,
+        generationEvent: payload && payload.generationEvent ? payload.generationEvent : undefined,
+      });
     } catch (eArm) {
       var armMsg = eArm && eArm.message ? String(eArm.message) : String(eArm);
       postGeminiClipboardAbort();

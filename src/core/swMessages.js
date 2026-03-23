@@ -5,6 +5,7 @@
 import { PICPUCK_COMMAND, LOG_APPEND } from './runtimeMessages.js';
 import { getCommandRecordByPicpuckAction } from './registry.js';
 import { masterDispatch } from './masterDispatch.js';
+import { geminiRelayCallerTabByRoundId } from './taskBindings.js';
 import { appendLog, getContext } from './roundContext.js';
 import { getSinkRoundForTab } from './logSink.js';
 import { pushRoundPhaseUi } from './phaseUi.js';
@@ -64,6 +65,41 @@ export function installRuntimeMessageHandlers() {
         return true;
       }
 
+      /** Gemini 剪贴板成功后：由 Gemini 页 CS 将整图 base64 转发回发起命令的熔炉标签页（见 picpuckAgentContent） */
+      if (payload.action === '__picpuckGeminiRelayGeneratedImage') {
+        (async () => {
+          try {
+            const roundId = typeof payload.roundId === 'string' ? payload.roundId : '';
+            const imageBase64 = typeof payload.imageBase64 === 'string' ? payload.imageBase64 : '';
+            const contentType =
+              typeof payload.contentType === 'string' && payload.contentType ? payload.contentType : 'image/png';
+            const generationEvent =
+              payload.generationEvent && typeof payload.generationEvent === 'object' ? payload.generationEvent : null;
+            if (!roundId || !imageBase64 || !generationEvent) {
+              sendResponse({ ok: false, error: 'bad relay payload' });
+              return;
+            }
+            const callerTabId = geminiRelayCallerTabByRoundId.get(roundId);
+            if (callerTabId == null) {
+              sendResponse({ ok: false, error: 'relay round expired' });
+              return;
+            }
+            await chrome.tabs.sendMessage(callerTabId, {
+              type: 'PICPUCK_GEMINI_GENERATED_IMAGE',
+              imageBase64,
+              contentType,
+              generationEvent,
+            });
+            geminiRelayCallerTabByRoundId.delete(roundId);
+            sendResponse({ ok: true });
+          } catch (e) {
+            const m = e instanceof Error ? e.message : String(e);
+            sendResponse({ ok: false, error: m });
+          }
+        })();
+        return true;
+      }
+
       /** 开发用：MAIN 世界注入 fetch/XHR 测试钩子（见 geminiNetworkHookTestMain.js） */
       if (payload.action === '__picpuckGeminiNetHookTest') {
         const tabId = sender.tab?.id;
@@ -109,7 +145,8 @@ export function installRuntimeMessageHandlers() {
           }
           const clientRequestId =
             typeof payload.clientRequestId === 'string' ? payload.clientRequestId : crypto.randomUUID();
-          const result = await masterDispatch(clientRequestId, rec.command, payload);
+          const callerTabId = sender.tab && typeof sender.tab.id === 'number' ? sender.tab.id : 0;
+          const result = await masterDispatch(clientRequestId, rec.command, payload, callerTabId);
           sendResponse({
             ok: result.ok,
             roundId: result.roundId,
