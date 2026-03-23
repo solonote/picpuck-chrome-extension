@@ -1,5 +1,5 @@
 /**
- * step02_attach_log_sink 调用 `attachLogSink` 注册本轮 roundId；之后仅接受同 round 的 LOG_APPEND。
+ * 框架 step02（frameworkPreflight）调用 `attachLogSink` 注册本轮 roundId；之后仅接受同 round 的 LOG_APPEND。
  * 不替代 §9.3 的顶栏执行槽：空闲判定仍以页面 DOM 为准（R14）。
  */
 

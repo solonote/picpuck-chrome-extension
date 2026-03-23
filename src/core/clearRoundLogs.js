@@ -1,5 +1,5 @@
 /**
- * §12.2：站点 step01 仅委托此 API；清空 logs、lastInfoMessage 并将 phase 置 clearing（实现见 roundContext.clearLogs）。
+ * §12.2：框架 step01（frameworkPreflight）调用；清空 logs、lastInfoMessage 并将 phase 置 clearing（实现见 roundContext.clearLogs）。
  */
 import { clearLogs } from './roundContext.js';
 

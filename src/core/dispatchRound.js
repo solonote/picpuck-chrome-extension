@@ -7,6 +7,10 @@ import { releaseExecSlot } from './releaseExecSlot.js';
 import { inFlightByTabId, roundBinding } from './taskBindings.js';
 import { detachLogSink } from './logSink.js';
 import { pushRoundPhaseUi } from './phaseUi.js';
+import {
+  frameworkStep01_clearRoundLogs,
+  frameworkStep02_attachLogSink,
+} from './frameworkPreflight.js';
 
 /**
  * @param {{ clientRequestId: string, command: string, tabId: number, roundId: string, payload: Record<string, unknown> }} args
@@ -15,8 +19,8 @@ import { pushRoundPhaseUi } from './phaseUi.js';
 export async function dispatchRound(args) {
   const { clientRequestId, command, tabId, roundId, payload } = args;
   const rec = getCommandRecord(command);
-  // step01/step02 为强制前两项（§3.1、§5.1）
-  if (!rec || !Array.isArray(rec.steps) || rec.steps.length < 2) {
+  // step01/step02 由 core 框架统一执行；steps 仅含站点业务步骤（§5.1）
+  if (!rec || !Array.isArray(rec.steps)) {
     await releaseExecSlot(tabId);
     inFlightByTabId.delete(tabId);
     roundBinding.delete(roundId);
@@ -35,15 +39,14 @@ export async function dispatchRound(args) {
     updatePhase(tabId, 'received');
     await pushRoundPhaseUi(tabId, roundId);
 
-    await rec.steps[0](ctx); // step01_clear_round_logs
-    await rec.steps[1](ctx); // step02_attach_log_sink
+    await frameworkStep01_clearRoundLogs(ctx);
+    await frameworkStep02_attachLogSink(ctx);
 
     // §5.1：step02 完成后再置 running，直至终止态
     updatePhase(tabId, 'running');
     await pushRoundPhaseUi(tabId, roundId);
 
-    // §5.1：业务步骤从下标 2 起
-    for (let i = 2; i < rec.steps.length; i += 1) {
+    for (let i = 0; i < rec.steps.length; i += 1) {
       const fn = rec.steps[i];
       if (typeof fn !== 'function') throw new Error(`step ${i} missing`);
       const r = await fn(ctx);

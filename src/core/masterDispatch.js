@@ -1,5 +1,5 @@
 /**
- * §5.0 masterDispatch：roundId → allocateTab → 票据与 inFlight → dispatchRound。
+ * §5.0 masterDispatch：roundId → allocateTab（打开或复用工作 Tab，与具体 Task 步骤无关）→ 票据与 inFlight → dispatchRound。
  */
 import { allocateTab } from './allocateTab.js';
 import { dispatchRound } from './dispatchRound.js';
@@ -15,6 +15,7 @@ import { inFlightByTabId, roundBinding } from './taskBindings.js';
  */
 export async function masterDispatch(clientRequestId, command, payload) {
   const roundId = crypto.randomUUID();
+  // 工作 Tab：按 CommandRecord.homeUrl/taskBaseUrl 全量 query 后筛选并抢占或新建（core/allocateTab）
   const alloc = await allocateTab(command);
   if (!alloc.ok) {
     return {
