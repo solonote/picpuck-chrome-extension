@@ -64,6 +64,33 @@ export function installRuntimeMessageHandlers() {
         return true;
       }
 
+      /** 开发用：MAIN 世界注入 fetch/XHR 测试钩子（见 geminiNetworkHookTestMain.js） */
+      if (payload.action === '__picpuckGeminiNetHookTest') {
+        const tabId = sender.tab?.id;
+        if (tabId == null) {
+          sendResponse({ ok: false, error: 'no tab' });
+          return;
+        }
+        const hookFile = 'src/agents/gemini/geminiNetworkHookTestMain.js';
+        (async () => {
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId },
+              world: 'MAIN',
+              files: [hookFile],
+            });
+            sendResponse({ ok: true });
+          } catch (e) {
+            const m = e instanceof Error ? e.message : String(e);
+            sendResponse({ ok: false, error: m });
+          }
+        })().catch((e) => {
+          const m = e instanceof Error ? e.message : String(e);
+          sendResponse({ ok: false, error: m });
+        });
+        return true;
+      }
+
       (async () => {
         try {
           if (payload.type !== PAGE_CMD_TYPE) {

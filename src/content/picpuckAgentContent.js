@@ -278,4 +278,19 @@
     applyRoundPhase(idlePayload);
     wireLeftClick();
   }
+
+  /** Gemini：URL 带 picpuck_net_hook=1 或 =all 时注入 MAIN 世界网络测试钩子（控制台看 [PicPuck net-test]） */
+  (function requestGeminiNetHookIfQuery() {
+    try {
+      if (typeof location.hostname !== 'string' || location.hostname.indexOf('gemini.google.com') === -1) {
+        return;
+      }
+      if (!/[?&]picpuck_net_hook=(?:1|all)(?:&|$)/.test(location.search || '')) {
+        return;
+      }
+      safeRuntimeSendMessage({ type: PICPUCK_COMMAND, payload: { action: '__picpuckGeminiNetHookTest' } });
+    } catch (_) {
+      /* ignore */
+    }
+  })();
 })();
