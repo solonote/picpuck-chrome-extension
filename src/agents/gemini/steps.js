@@ -66,6 +66,11 @@ function pickGeminiMainResult(results) {
     const r = ir && typeof ir === 'object' && 'result' in ir ? ir.result : null;
     if (r && typeof r === 'object' && r.ok === true) return r;
   }
+  for (const ir of results) {
+    const r = ir && typeof ir === 'object' && 'result' in ir ? ir.result : null;
+    if (r && typeof r === 'object' && r.ok === false && r.code === 'GEMINI_STEP12_SKIP_FRAME') continue;
+    if (r && typeof r === 'object') return r;
+  }
   const first = results[0];
   return first && typeof first === 'object' && 'result' in first ? first.result : null;
 }
@@ -262,7 +267,7 @@ export async function step10_gemini_confirm_prompt_applied(ctx) {
   logStepDone(tabId, roundId, stepKey, 10);
 }
 
-/** fillOnly 时跳过：否则在输入区派发 Enter 提交 */
+/** fillOnly 时跳过：否则在输入区派发 Enter 提交（仅主 frame：allFrames 时子 frame 会拖满 executeScript 整轮 Promise） */
 export async function step11_gemini_submit_enter_if_needed(ctx) {
   const { tabId, roundId, payload } = ctx;
   const stepKey = 'step11_gemini_submit_enter_if_needed';
@@ -278,7 +283,6 @@ export async function step11_gemini_submit_enter_if_needed(ctx) {
     runnerName: 'runStep11GeminiSubmitEnterIfNeeded',
     mainPayload: {},
     failUserMsg: '动作失败+无法用 Enter 提交 Gemini 提示词',
-    allFrames: true,
   });
 }
 
@@ -298,7 +302,6 @@ export async function step12_gemini_wait_generated_image(ctx) {
     runnerName: 'runStep12GeminiWaitGeneratedImage',
     mainPayload: {},
     failUserMsg: '动作失败+等待 Gemini 生成图超时',
-    allFrames: true,
   });
 }
 
@@ -318,6 +321,5 @@ export async function step13_gemini_download_full_image_to_clipboard(ctx) {
     runnerName: 'runStep13GeminiDownloadFullImageToClipboard',
     mainPayload: { captureTimeoutMs: 120000 },
     failUserMsg: '动作失败+整图下载链或剪贴板写入失败',
-    allFrames: true,
   });
 }

@@ -6,11 +6,15 @@
   var g = typeof globalThis !== 'undefined' ? globalThis : window;
   if (g.__picpuckFetchCapture) return;
 
+  var DEFAULT_URL_PREFIXES = [
+    'https://lh3.googleusercontent.com/rd-gg-dl/',
+    'https://lh3.googleusercontent.com/gg-dl/',
+  ];
   var armed = false;
   var delivered = false;
   var opts = {
     minByteLength: 1048576,
-    urlPrefix: 'https://lh3.googleusercontent.com/rd-gg-dl/',
+    urlPrefixes: DEFAULT_URL_PREFIXES.slice(),
     mimePrefix: 'image/',
   };
 
@@ -40,10 +44,20 @@
     return '';
   }
 
+  function urlMatchesPrefixes(absUrl) {
+    var list = opts.urlPrefixes;
+    if (!list || list.length === 0) return false;
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      if (p && absUrl.indexOf(p) === 0) return true;
+    }
+    return false;
+  }
+
   function matches(absUrl, ct, byteLength) {
     if (!armed || delivered) return false;
     if (!absUrl || byteLength <= opts.minByteLength) return false;
-    if (opts.urlPrefix && absUrl.indexOf(opts.urlPrefix) !== 0) return false;
+    if (!urlMatchesPrefixes(absUrl)) return false;
     var c = (ct || '').split(';')[0].trim().toLowerCase();
     if (opts.mimePrefix && c.indexOf(opts.mimePrefix.toLowerCase()) !== 0) return false;
     return true;
@@ -147,9 +161,13 @@
   }
 
   function arm(o) {
+    opts.minByteLength = 1048576;
+    opts.urlPrefixes = DEFAULT_URL_PREFIXES.slice();
+    opts.mimePrefix = 'image/';
     if (o) {
       if (o.minByteLength != null) opts.minByteLength = o.minByteLength;
-      if (o.urlPrefix != null) opts.urlPrefix = o.urlPrefix;
+      if (o.urlPrefixes != null && o.urlPrefixes.length) opts.urlPrefixes = o.urlPrefixes.slice();
+      else if (o.urlPrefix != null) opts.urlPrefixes = [String(o.urlPrefix)];
       if (o.mimePrefix != null) opts.mimePrefix = o.mimePrefix;
     }
     delivered = false;

@@ -404,10 +404,27 @@
   var WAIT_GENERATED_MS = 180000;
   var POLL_MS = 400;
 
+  /** 无工作台特征则本 document 非 Gemini 主 UI（如广告 iframe），避免 allFrames 时空转 WAIT_GENERATED_MS */
+  function geminiWorkbenchLikelyInThisDocument() {
+    try {
+      return !!(
+        doc.querySelector('rich-textarea .ql-editor') ||
+        doc.querySelector('[aria-label="为 Gemini 输入提示"]') ||
+        doc.querySelector('toolbox-drawer') ||
+        doc.querySelector('generated-image')
+      );
+    } catch (eW) {
+      return true;
+    }
+  }
+
   /** @param {{ roundId: string }} payload */
   async function runStep12GeminiWaitGeneratedImage(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step12_gemini_wait_generated_image';
+    if (!geminiWorkbenchLikelyInThisDocument()) {
+      return { ok: false, code: 'GEMINI_STEP12_SKIP_FRAME' };
+    }
     var deadline = Date.now() + WAIT_GENERATED_MS;
     while (Date.now() < deadline) {
       var ge = doc.querySelector('generated-image');
@@ -512,7 +529,6 @@
     });
     cap.arm({
       minByteLength: 1048576,
-      urlPrefix: 'https://lh3.googleusercontent.com/rd-gg-dl/',
       mimePrefix: 'image/',
     });
     var btn =
