@@ -3,9 +3,10 @@
  *
  * 触发（地址栏）：
  * - `?picpuck_net_hook=1`：只打日志到与下载链相关的 URL（googleusercontent / fife / gg-dl 等）
- * - `?picpuck_net_hook=all`：对该 Tab 上所有 fetch/XHR 都打日志（极吵，仅排障）
+ * - `?picpuck_net_hook=all`：对该 frame 上所有 fetch/XHR 都打日志（极吵，仅排障）
  *
- * 须整页刷新或带参数打开，使内容脚本发起注入。
+ * 说明：相对路径会先按当前 `location` 解析成绝对 URL 再过滤；注入使用 `allFrames:true` 覆盖 iframe。
+ * 若仍无日志：请求可能发自 **Worker / Service Worker**，本脚本无法挂钩（需别方案）。
  */
 (function () {
   if (typeof window === 'undefined') return;
@@ -14,20 +15,39 @@
 
   var PREFIX = '[PicPuck net-test]';
   var logAll = /[?&]picpuck_net_hook=all(?:&|$)/.test(window.location.search || '');
+  var baseHref = typeof window.location !== 'undefined' ? window.location.href : 'https://gemini.google.com/';
 
-  function shouldLogUrl(u) {
-    if (logAll) return true;
-    if (u == null) return true;
-    var s = typeof u === 'string' ? u : String(u);
-    if (!s) return false;
-    return /googleusercontent|fife\.usercontent|gg-dl|rd-gg-dl|google\.com\/.*(gg-dl|rd-gg-dl)/i.test(s);
+  function resolveUrl(maybe) {
+    if (maybe == null || maybe === '') return '';
+    var s = typeof maybe === 'string' ? maybe : String(maybe);
+    try {
+      return new URL(s, baseHref).href;
+    } catch (e) {
+      return s;
+    }
   }
 
-  /** @param {string} label */
-  function logFetchResponse(url, response, bodyInfo) {
+  function fetchInputUrl(input) {
     try {
-      console.log(PREFIX, 'fetch', {
-        url: url,
+      if (typeof input === 'string') return input;
+      if (typeof Request !== 'undefined' && input instanceof Request) return input.url;
+      if (input && typeof input === 'object' && typeof input.url === 'string') return input.url;
+    } catch (e) {
+      /* ignore */
+    }
+    return '';
+  }
+
+  function shouldLogAbsoluteUrl(absUrl) {
+    if (logAll) return true;
+    if (!absUrl) return false;
+    return /googleusercontent|fife\.usercontent|gg-dl|rd-gg-dl|google\.com\/.*(gg-dl|rd-gg-dl)/i.test(absUrl);
+  }
+
+  function logFetchResponse(absUrl, response, bodyInfo) {
+    try {
+      console.log(PREFIX, 'fetch response', {
+        url: absUrl,
         status: response.status,
         ok: response.ok,
         contentType: response.headers.get('content-type'),
@@ -38,49 +58,68 @@
     }
   }
 
-  var origFetch = window.fetch;
-  if (typeof origFetch === 'function') {
-    window.fetch = function (input, init) {
-      var url =
-        typeof input === 'string'
-          ? input
-          : input && typeof input === 'object' && 'url' in input
-            ? String(/** @type {Request} */ (input).url)
-            : '';
-      return origFetch.apply(this, arguments).then(function (response) {
-        if (!shouldLogUrl(url)) return response;
-        try {
-          var clone = response.clone();
-          var ct = clone.headers.get('content-type') || '';
-          if (/^image\//i.test(ct)) {
-            clone.arrayBuffer().then(function (buf) {
-              logFetchResponse(url, response, { kind: 'image', byteLength: buf.byteLength });
-            });
-          } else if (/^application\/json/i.test(ct)) {
-            clone
-              .text()
-              .then(function (t) {
-                logFetchResponse(url, response, { kind: 'json', textLen: t.length, sample: t.slice(0, 300) });
-              })
-              .catch(function () {
-                logFetchResponse(url, response, { kind: 'json', readFailed: true });
-              });
-          } else {
-            clone
-              .arrayBuffer()
-              .then(function (buf) {
-                logFetchResponse(url, response, { kind: 'other', byteLength: buf.byteLength, contentType: ct });
-              })
-              .catch(function () {
-                logFetchResponse(url, response, { kind: 'other', readFailed: true, contentType: ct });
-              });
-          }
-        } catch (e) {
-          console.warn(PREFIX, 'fetch clone error', url, e);
-        }
+  function wrapFetchResponse(absUrl, response) {
+    if (!shouldLogAbsoluteUrl(absUrl)) return response;
+    try {
+      var clone = response.clone();
+      var ct = clone.headers.get('content-type') || '';
+      if (/^image\//i.test(ct)) {
+        clone.arrayBuffer().then(function (buf) {
+          logFetchResponse(absUrl, response, { kind: 'image', byteLength: buf.byteLength });
+        });
+      } else if (/^application\/json/i.test(ct)) {
+        clone
+          .text()
+          .then(function (t) {
+            logFetchResponse(absUrl, response, { kind: 'json', textLen: t.length, sample: t.slice(0, 300) });
+          })
+          .catch(function () {
+            logFetchResponse(absUrl, response, { kind: 'json', readFailed: true });
+          });
+      } else {
+        clone
+          .arrayBuffer()
+          .then(function (buf) {
+            logFetchResponse(absUrl, response, { kind: 'other', byteLength: buf.byteLength, contentType: ct });
+          })
+          .catch(function () {
+            logFetchResponse(absUrl, response, { kind: 'other', readFailed: true, contentType: ct });
+          });
+      }
+    } catch (e) {
+      console.warn(PREFIX, 'fetch clone error', absUrl, e);
+    }
+    return response;
+  }
+
+  function patchedFetch(input, init) {
+    var raw = fetchInputUrl(input);
+    var absUrl = resolveUrl(raw);
+    if (logAll) {
+      console.log(PREFIX, 'fetch call', { raw: raw, resolved: absUrl });
+    }
+    var p = origFetch.call(this, input, init);
+    if (!p || typeof p.then !== 'function') return p;
+    return p.then(
+      function (response) {
+        wrapFetchResponse(absUrl, response);
         return response;
-      });
-    };
+      },
+      function (err) {
+        if (shouldLogAbsoluteUrl(absUrl)) {
+          console.log(PREFIX, 'fetch rejected', { url: absUrl, error: String(err && err.message ? err.message : err) });
+        }
+        throw err;
+      },
+    );
+  }
+
+  var origFetch = globalThis.fetch;
+  if (typeof origFetch === 'function') {
+    globalThis.fetch = patchedFetch;
+    if (typeof window !== 'undefined' && window.fetch !== patchedFetch) {
+      window.fetch = patchedFetch;
+    }
   }
 
   var origOpen = XMLHttpRequest.prototype.open;
@@ -88,46 +127,58 @@
 
   XMLHttpRequest.prototype.open = function (method, url) {
     try {
-      this.__picpuckUrl = typeof url === 'string' ? url : String(url);
+      var raw = typeof url === 'string' ? url : String(url);
+      this.__picpuckUrlRaw = raw;
+      this.__picpuckUrl = resolveUrl(raw);
     } catch (e) {
+      this.__picpuckUrlRaw = '';
       this.__picpuckUrl = '';
     }
     return origOpen.apply(this, arguments);
   };
+
+  function logXhrDone(xhr) {
+    var absUrl = xhr.__picpuckUrl || '';
+    if (logAll) {
+      console.log(PREFIX, 'xhr call', { raw: xhr.__picpuckUrlRaw, resolved: absUrl });
+    }
+    if (!shouldLogAbsoluteUrl(absUrl)) return;
+    try {
+      var ct = xhr.getResponseHeader('content-type') || '';
+      var bodyInfo = { kind: 'unknown' };
+      var rt = xhr.responseType;
+      if (rt === '' || rt === 'text') {
+        var t = xhr.responseText;
+        bodyInfo = { kind: 'text', length: t ? t.length : 0, sample: t ? t.slice(0, 300) : '' };
+      } else if (rt === 'arraybuffer' && xhr.response) {
+        bodyInfo = { kind: 'arraybuffer', byteLength: xhr.response.byteLength };
+      } else if (rt === 'blob' && xhr.response) {
+        bodyInfo = { kind: 'blob', size: xhr.response.size };
+      } else if (rt === 'json') {
+        bodyInfo = { kind: 'json', value: xhr.response };
+      } else {
+        bodyInfo = { kind: 'opaque', responseType: rt };
+      }
+      console.log(PREFIX, 'xhr response', {
+        url: absUrl,
+        status: xhr.status,
+        contentType: ct,
+        response: bodyInfo,
+      });
+    } catch (e) {
+      console.warn(PREFIX, 'xhr log error', e);
+    }
+  }
 
   XMLHttpRequest.prototype.send = function () {
     var xhr = this;
     if (!xhr.__picpuckXhrHooked) {
       xhr.__picpuckXhrHooked = true;
       xhr.addEventListener(
-        'load',
+        'readystatechange',
         function () {
-          var u = xhr.__picpuckUrl || '';
-          if (!shouldLogUrl(u)) return;
-          try {
-            var ct = xhr.getResponseHeader('content-type') || '';
-            var bodyInfo = { kind: 'unknown' };
-            var rt = xhr.responseType;
-            if (rt === '' || rt === 'text') {
-              var t = xhr.responseText;
-              bodyInfo = { kind: 'text', length: t ? t.length : 0, sample: t ? t.slice(0, 300) : '' };
-            } else if (rt === 'arraybuffer' && xhr.response) {
-              bodyInfo = { kind: 'arraybuffer', byteLength: xhr.response.byteLength };
-            } else if (rt === 'blob' && xhr.response) {
-              bodyInfo = { kind: 'blob', size: xhr.response.size };
-            } else if (rt === 'json') {
-              bodyInfo = { kind: 'json', value: xhr.response };
-            } else {
-              bodyInfo = { kind: 'opaque', responseType: rt };
-            }
-            console.log(PREFIX, 'xhr', {
-              url: u,
-              status: xhr.status,
-              contentType: ct,
-              response: bodyInfo,
-            });
-          } catch (e) {
-            console.warn(PREFIX, 'xhr log error', e);
+          if (xhr.readyState === 4) {
+            logXhrDone(xhr);
           }
         },
         false,
@@ -136,5 +187,14 @@
     return origSend.apply(this, arguments);
   };
 
-  console.info(PREFIX, 'MAIN world hook installed (fetch + XHR). Filter: googleusercontent / fife / gg-dl / rd-gg-dl.');
+  var inIframe = typeof window !== 'undefined' && window.self !== window.top;
+  console.info(PREFIX, 'MAIN hook installed', {
+    fetch: typeof origFetch === 'function',
+    inIframe: inIframe,
+    href: typeof window.location !== 'undefined' ? window.location.href : '',
+    filter: logAll ? 'ALL' : 'googleusercontent|fife|gg-dl|rd-gg-dl',
+  });
+  if (!logAll) {
+    console.info(PREFIX, '若无任何 fetch/xhr 日志：试 ?picpuck_net_hook=all；若在 Worker 里发请求则本脚本看不到。');
+  }
 })();

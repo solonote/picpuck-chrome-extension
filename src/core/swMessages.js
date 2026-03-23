@@ -75,7 +75,7 @@ export function installRuntimeMessageHandlers() {
         (async () => {
           try {
             await chrome.scripting.executeScript({
-              target: { tabId },
+              target: { tabId, allFrames: true },
               world: 'MAIN',
               files: [hookFile],
             });
