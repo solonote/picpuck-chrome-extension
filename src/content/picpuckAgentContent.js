@@ -1,6 +1,6 @@
 /* global chrome */
 /**
- * 内容脚本（隔离世界）：与页面共享 DOM，可改 `#picpuck-agent-topbar`；与 SW 用 runtime 消息通信。
+ * 内容脚本（隔离世界）：在即梦/Gemini 注入顶栏 `#picpuck-agent-topbar`；本站（如 localhost）仅作 postMessage→SW 桥，不显示顶栏。
  *
  * - §4.1：左「当前轮次」（三连击）+ 中「等待/执行中」相对整条顶栏几何水平居中 + 右 Step 摘要（右对齐，`title` 全文）
  * - §4.2：600ms 内三次点击左侧 → 向 SW 索取日志 JSON 并写入剪贴板（含 session 快照，避免 SW 休眠丢日志）
@@ -27,6 +27,26 @@
       window.removeEventListener('message', geminiClipboardBufferListener);
       geminiClipboardBufferListener = null;
     }
+  }
+
+  /**
+   * 顶栏仅用于即梦 / Gemini 工作台；localhost 等本站仅保留 postMessage→SW 桥，不注入 UI。
+   */
+  function showPicpuckAgentTopbar() {
+    try {
+      const h = String(location.hostname || '').toLowerCase();
+      if (h === 'gemini.google.com') return true;
+      return h === 'jimeng.jianying.com' || h.endsWith('.jimeng.jianying.com');
+    } catch {
+      return false;
+    }
+  }
+
+  /** 升级扩展后移除曾注入在本站（如 localhost）的顶栏残留 */
+  function removeStalePicpuckTopbar() {
+    if (showPicpuckAgentTopbar()) return;
+    const el = document.getElementById(TOPBAR_ID);
+    if (el && el.parentNode) el.parentNode.removeChild(el);
   }
 
   /**
@@ -140,6 +160,9 @@
 
   /** 若尚无根节点则创建；与 allocateTab 注入的裸根节点共存，仅补全左右子节点与样式 */
   function ensureTopbarShell() {
+    if (!showPicpuckAgentTopbar()) {
+      return { root: null, left: null, center: null, right: null };
+    }
     let root = document.getElementById(TOPBAR_ID);
     if (!root) {
       root = document.createElement('div');
@@ -187,6 +210,7 @@
   }
 
   function applyRoundPhase(payload) {
+    if (!showPicpuckAgentTopbar()) return;
     const { left, center, right } = ensureTopbarShell();
     const phase = payload && payload.phase != null ? String(payload.phase) : 'idle';
     const roundShort = payload && payload.roundIdShort != null ? String(payload.roundIdShort) : '—';
@@ -261,7 +285,9 @@
   }
 
   function wireLeftClick() {
+    if (!showPicpuckAgentTopbar()) return;
     const { left } = ensureTopbarShell();
+    if (!left) return;
     left.removeEventListener('click', onLeftClick);
     left.addEventListener('click', onLeftClick);
   }
@@ -362,16 +388,19 @@
   });
 
   const idlePayload = { phase: 'idle', roundIdShort: '—', lastInfoMessage: '' };
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      ensureTopbarShell();
-      applyRoundPhase(idlePayload);
-      wireLeftClick();
-    });
-  } else {
+
+  function initTopbarIfWorkbench() {
+    removeStalePicpuckTopbar();
+    if (!showPicpuckAgentTopbar()) return;
     ensureTopbarShell();
     applyRoundPhase(idlePayload);
     wireLeftClick();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initTopbarIfWorkbench);
+  } else {
+    initTopbarIfWorkbench();
   }
 
   /** Gemini：URL 带 picpuck_net_hook=1 或 =all 时注入 MAIN 世界网络测试钩子（控制台看 [PicPuck net-test]） */
