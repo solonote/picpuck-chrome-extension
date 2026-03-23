@@ -165,4 +165,6 @@
     arm: arm,
     disarm: disarm,
   };
+  /** 每个 MAIN 世界首次加载本脚本即完成 fetch/XHR 注册一次；重复执行脚本会在文件头 return，不会二次 patch */
+  install();
 })();

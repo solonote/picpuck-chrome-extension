@@ -49,10 +49,11 @@ function effectiveGeminiPrompt(raw, aspectRatioId) {
 
 async function ensureGeminiImageMainWorldInjected(tabId, allFrames) {
   const target = allFrames ? { tabId, allFrames: true } : { tabId };
+  /** 先加载公共捕获（内联 install 一次），再加载 Gemini MAIN；重复注入时两脚本均在文件头短路，不会重复注册钩子 */
   await chrome.scripting.executeScript({
     target,
     world: 'MAIN',
-    files: [GEMINI_IMAGE_MAIN_WORLD_FILE],
+    files: [FETCH_CAPTURE_MAIN_FILE, GEMINI_IMAGE_MAIN_WORLD_FILE],
   });
 }
 
@@ -301,7 +302,7 @@ export async function step12_gemini_wait_generated_image(ctx) {
   });
 }
 
-/** 注入公共捕获脚本 → 点「下载完整尺寸」→ 首条 >1MB 的 lh3 rd-gg-dl 图片写入剪贴板 */
+/** 点「下载完整尺寸」→ 首条 >1MB 的 lh3 rd-gg-dl 图片经临时监听写入剪贴板（捕获脚本已在 ensure 时注入并单次 register） */
 export async function step13_gemini_download_full_image_to_clipboard(ctx) {
   const { tabId, roundId, payload } = ctx;
   const stepKey = 'step13_gemini_download_full_image_to_clipboard';
@@ -310,17 +311,6 @@ export async function step13_gemini_download_full_image_to_clipboard(ctx) {
     logStepInfo(tabId, roundId, stepKey, 13, 'Step13.本步跳过+fillOnly');
     logStepDone(tabId, roundId, stepKey, 13);
     return;
-  }
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
-      world: 'MAIN',
-      files: [FETCH_CAPTURE_MAIN_FILE],
-    });
-  } catch (e) {
-    const m = e instanceof Error ? e.message : String(e);
-    logStepFail(tabId, roundId, stepKey, 13, '动作失败+网络捕获脚本注入失败请刷新页面', m.slice(0, 500));
-    throw new Error(GEMINI_IMAGE_MAIN_INJECT_FAILED);
   }
   await execGeminiMainRunner(ctx, {
     nn: 13,

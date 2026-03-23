@@ -436,22 +436,67 @@
     return { ok: false, code: 'GEMINI_GENERATED_IMAGE_TIMEOUT' };
   }
 
+  function postGeminiClipboardAbort() {
+    try {
+      window.postMessage({ picpuckBridge: true, kind: 'GEMINI_FULL_IMAGE_CLIPBOARD_ABORT' }, window.location.origin);
+    } catch (eAbort) {
+      /* ignore */
+    }
+  }
+
+  /** 与内容脚本握手：先挂上 BUFFER 临时监听并 ARM_READY，再 arm/点击，避免 BUFFER 早于监听入队 */
+  function waitGeminiClipboardArmReady() {
+    return new Promise(function (resolve, reject) {
+      var armAckMs = 5000;
+      var t = setTimeout(function () {
+        window.removeEventListener('message', onAck);
+        reject(new Error('GEMINI_CLIPBOARD_ARM_TIMEOUT'));
+      }, armAckMs);
+      function onAck(ev) {
+        if (ev.source !== window) return;
+        var d = ev.data;
+        if (!d || d.picpuckBridge !== true || d.kind !== 'GEMINI_FULL_IMAGE_CLIPBOARD_ARM_READY') return;
+        clearTimeout(t);
+        window.removeEventListener('message', onAck);
+        resolve();
+      }
+      window.addEventListener('message', onAck);
+      try {
+        window.postMessage({ picpuckBridge: true, kind: 'GEMINI_FULL_IMAGE_CLIPBOARD_ARM' }, window.location.origin);
+      } catch (ePost) {
+        clearTimeout(t);
+        window.removeEventListener('message', onAck);
+        reject(ePost);
+      }
+    });
+  }
+
   /** @param {{ roundId: string, captureTimeoutMs?: number }} payload */
   async function runStep13GeminiDownloadFullImageToClipboard(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step13_gemini_download_full_image_to_clipboard';
     var cap = globalThis.__picpuckFetchCapture;
-    if (!cap || typeof cap.install !== 'function') {
+    if (!cap || typeof cap.arm !== 'function') {
       appendMainLog(roundId, stepKey, 'info', 'Step13.动作失败+捕获模块未就绪');
       return { ok: false, code: 'GEMINI_FETCH_CAPTURE_MISSING' };
     }
-    cap.install();
+    try {
+      await waitGeminiClipboardArmReady();
+    } catch (eArm) {
+      var armMsg = eArm && eArm.message ? String(eArm.message) : String(eArm);
+      postGeminiClipboardAbort();
+      if (armMsg.indexOf('GEMINI_CLIPBOARD_ARM_TIMEOUT') !== -1) {
+        return { ok: false, code: 'GEMINI_CLIPBOARD_ARM_TIMEOUT' };
+      }
+      return { ok: false, code: 'GEMINI_CLIPBOARD_FAILED' };
+    }
     var captureTimeoutMs =
       payload && typeof payload.captureTimeoutMs === 'number' && payload.captureTimeoutMs > 0 ? payload.captureTimeoutMs : 120000;
     var p = new Promise(function (resolve, reject) {
       var t = setTimeout(function () {
         window.removeEventListener('message', onDone);
         cap.disarm();
+        postGeminiClipboardAbort();
         reject(new Error('GEMINI_FULL_IMAGE_CAPTURE_TIMEOUT'));
       }, captureTimeoutMs);
       function onDone(ev) {
@@ -475,6 +520,7 @@
       doc.querySelector('button[data-test-id="download-generated-image-button"]');
     if (!btn) {
       cap.disarm();
+      postGeminiClipboardAbort();
       appendMainLog(roundId, stepKey, 'info', 'Step13.动作失败+未找到下载按钮');
       return { ok: false, code: 'GEMINI_DOWNLOAD_BUTTON_NOT_FOUND' };
     }
@@ -486,6 +532,7 @@
     } catch (e) {
       var msg = e && e.message ? String(e.message) : String(e);
       cap.disarm();
+      postGeminiClipboardAbort();
       if (msg.indexOf('GEMINI_FULL_IMAGE_CAPTURE_TIMEOUT') !== -1) {
         return { ok: false, code: 'GEMINI_FULL_IMAGE_CAPTURE_TIMEOUT' };
       }

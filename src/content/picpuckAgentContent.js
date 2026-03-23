@@ -19,6 +19,16 @@
   const COPY_FLASH_COLOR = '#1a3d1a';
   const TRIPLE_CLICK_MS = 600;
 
+  /** Gemini step13：仅在 ARM～BUFFER/ABORT 之间挂一次监听，处理完或中止即移除 */
+  let geminiClipboardBufferListener = null;
+
+  function removeGeminiClipboardBufferListener() {
+    if (geminiClipboardBufferListener) {
+      window.removeEventListener('message', geminiClipboardBufferListener);
+      geminiClipboardBufferListener = null;
+    }
+  }
+
   /** 与顶栏根背景一致，左右区盖住中层文案边缘，避免与几何居中句叠读 */
   const TOPBAR_SIDE_BG = 'rgba(20,20,24,.98)';
 
@@ -244,33 +254,50 @@
       safeRuntimeSendMessage({ type: LOG_APPEND, entry: d.entry });
       return;
     }
-    /** MAIN 捕获整图二进制后交内容脚本写剪贴板（MAIN 无 clipboard API） */
-    if (d && d.picpuckBridge === true && d.kind === 'GEMINI_FULL_IMAGE_BUFFER') {
-      (async () => {
-        let ok = false;
-        let err = '';
-        try {
-          const buf = d._buffer;
-          if (!(buf instanceof ArrayBuffer)) {
-            throw new Error('GEMINI_CLIPBOARD_FAILED');
+    /** MAIN 先发 ARM，本处挂上 BUFFER 专用监听后再 ARM_READY，避免 BUFFER 早于监听 */
+    if (d && d.picpuckBridge === true && d.kind === 'GEMINI_FULL_IMAGE_CLIPBOARD_ARM') {
+      removeGeminiClipboardBufferListener();
+      geminiClipboardBufferListener = function onGeminiFullImageBuffer(event) {
+        if (event.source !== window) return;
+        const p = event.data;
+        if (!p || p.picpuckBridge !== true || p.kind !== 'GEMINI_FULL_IMAGE_BUFFER') return;
+        window.removeEventListener('message', geminiClipboardBufferListener);
+        geminiClipboardBufferListener = null;
+        (async () => {
+          let ok = false;
+          let err = '';
+          try {
+            const buf = p._buffer;
+            if (!(buf instanceof ArrayBuffer)) {
+              throw new Error('GEMINI_CLIPBOARD_FAILED');
+            }
+            const ctRaw = typeof p.contentType === 'string' && p.contentType ? p.contentType : 'image/png';
+            const blob = new Blob([buf], { type: ctRaw.split(';')[0].trim() });
+            await navigator.clipboard.write([new ClipboardItem({ [blob.type || 'image/png']: blob })]);
+            ok = true;
+          } catch (e) {
+            err = e instanceof Error ? e.message : String(e);
           }
-          const ctRaw = typeof d.contentType === 'string' && d.contentType ? d.contentType : 'image/png';
-          const blob = new Blob([buf], { type: ctRaw.split(';')[0].trim() });
-          await navigator.clipboard.write([new ClipboardItem({ [blob.type || 'image/png']: blob })]);
-          ok = true;
-        } catch (e) {
-          err = e instanceof Error ? e.message : String(e);
-        }
-        window.postMessage(
-          {
-            picpuckBridge: true,
-            kind: 'GEMINI_FULL_IMAGE_CLIPBOARD_DONE',
-            ok,
-            error: ok ? undefined : err || 'GEMINI_CLIPBOARD_FAILED',
-          },
-          window.location.origin,
-        );
-      })();
+          window.postMessage(
+            {
+              picpuckBridge: true,
+              kind: 'GEMINI_FULL_IMAGE_CLIPBOARD_DONE',
+              ok,
+              error: ok ? undefined : err || 'GEMINI_CLIPBOARD_FAILED',
+            },
+            window.location.origin,
+          );
+        })();
+      };
+      window.addEventListener('message', geminiClipboardBufferListener);
+      window.postMessage(
+        { picpuckBridge: true, kind: 'GEMINI_FULL_IMAGE_CLIPBOARD_ARM_READY' },
+        window.location.origin,
+      );
+      return;
+    }
+    if (d && d.picpuckBridge === true && d.kind === 'GEMINI_FULL_IMAGE_CLIPBOARD_ABORT') {
+      removeGeminiClipboardBufferListener();
       return;
     }
     if (!d || d.type !== PAGE_CMD) return;
