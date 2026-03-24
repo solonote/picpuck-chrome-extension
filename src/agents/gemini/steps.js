@@ -42,7 +42,10 @@ function payloadGenerationEvent(payload) {
   const subjectId = typeof ge.subjectId === 'string' ? ge.subjectId.trim() : '';
   const inputPrompt = typeof ge.inputPrompt === 'string' ? ge.inputPrompt : '';
   if (!projectId || !subjectType || !subjectId) return undefined;
-  return { projectId, subjectType, subjectId, inputPrompt };
+  const coreEngine = typeof ge.coreEngine === 'string' ? ge.coreEngine.trim() : '';
+  const out = { projectId, subjectType, subjectId, inputPrompt };
+  if (coreEngine) out.coreEngine = coreEngine;
+  return out;
 }
 
 function normalizeAspectRatioId(raw) {
@@ -277,7 +280,7 @@ export async function step09_gemini_fill_input_and_paste_images(ctx) {
       effectivePrompt: text,
       images: payloadImages(payload),
     },
-    failUserMsg: '动作失败+无法写入 Gemini 输入框或粘贴图片',
+    failUserMsg: '动作失败+无法写入 Gemini 输入框、粘贴参考图或等待参考图上传就绪超时',
     startMsg: '清空旧参考图写入提示词并粘贴参考图',
     doneMsg: '输入区与参考图已就绪',
   });
@@ -341,7 +344,8 @@ export async function step13_gemini_download_full_image_to_clipboard(ctx) {
     stepKey,
     runnerName: 'runStep13GeminiDownloadFullImageToClipboard',
     mainPayload: { captureTimeoutMs: 120000, generationEvent: payloadGenerationEvent(payload) },
-    failUserMsg: '动作失败+整图下载链或剪贴板写入失败',
+    failUserMsg:
+      '动作失败+整图下载链失败、5分钟内未能将本标签切回前台写入剪贴板、或剪贴板写入被拒',
     startMsg: '点击整图下载拦截响应并写入系统剪贴板',
     doneMsg: '整图已写入系统剪贴板',
   });

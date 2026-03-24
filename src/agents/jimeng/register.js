@@ -17,6 +17,11 @@ import {
   step15_jimeng_expand_at_mentions,
   step16_jimeng_set_logged_in_marker,
   step17_jimeng_click_generate_if_needed,
+  step18_jimeng_submit_prompt_enter_if_configured,
+  step19_jimeng_wait_generation_started,
+  step20_jimeng_wait_generation_finished,
+  step21_jimeng_collect_images_via_context_menu,
+  step22_jimeng_relay_images_to_caller,
 } from './steps.js';
 
 registerAgentCommands([
@@ -39,6 +44,11 @@ registerAgentCommands([
       step15_jimeng_expand_at_mentions,
       step16_jimeng_set_logged_in_marker,
       step17_jimeng_click_generate_if_needed,
+      step18_jimeng_submit_prompt_enter_if_configured,
+      step19_jimeng_wait_generation_started,
+      step20_jimeng_wait_generation_finished,
+      step21_jimeng_collect_images_via_context_menu,
+      step22_jimeng_relay_images_to_caller,
     ],
   },
 ]);

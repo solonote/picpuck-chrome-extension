@@ -819,6 +819,316 @@
     return { ok: true };
   }
 
+  function findLatestJimengGenerationRecordRoot(docRef) {
+    var d = docRef || doc;
+    var mainEl = d.querySelector('main');
+    var scope = mainEl || d.body || d;
+    var nodes = scope.querySelectorAll('div[class^="item-"][data-id][data-index]');
+    var i;
+    var el;
+    for (i = 0; i < nodes.length; i++) {
+      el = nodes[i];
+      if (el.getAttribute('data-index') === '0') return el;
+    }
+    var alt = scope.querySelector('[class*="ai-generated-record-content"]');
+    return alt || null;
+  }
+
+  function isJimengRecordGenerating(root) {
+    if (!root) return false;
+    var t = root.textContent || '';
+    if (t.indexOf('智能创意中') !== -1) return true;
+    if (root.querySelector('video[src*="record-loading-animation"]')) return true;
+    return /\d+%\s*造梦中/.test(t);
+  }
+
+  function isValidJimengResultImg(img) {
+    if (!img || img.tagName !== 'IMG') return false;
+    var src = img.getAttribute('src') || '';
+    if (src.indexOf('http://') !== 0 && src.indexOf('https://') !== 0) return false;
+    if (src.indexOf('record-loading-animation') !== -1) return false;
+    return img.complete && img.naturalWidth > 0;
+  }
+
+  function listJimengResultImagesOrdered(root) {
+    if (!root) return [];
+    var all = root.querySelectorAll('img');
+    var out = [];
+    var i;
+    for (i = 0; i < all.length; i++) {
+      if (isValidJimengResultImg(all[i])) out.push(all[i]);
+    }
+    return out;
+  }
+
+  function resolveContextMenuTargetForImg(img) {
+    var cur = img;
+    while (cur) {
+      if (
+        cur.getAttribute &&
+        cur.getAttribute('role') === 'button' &&
+        String(cur.getAttribute('tabindex')) === '0'
+      ) {
+        var anc = cur.closest && cur.closest('[data-apm-action="ai-generated-image-record-card"]');
+        if (anc) return { target: cur, degraded: false };
+      }
+      cur = cur.parentElement;
+    }
+    return { target: img, degraded: true };
+  }
+
+  function isElementVisible(el) {
+    if (!el || !el.getBoundingClientRect) return false;
+    var r = el.getBoundingClientRect();
+    if (r.width <= 0 && r.height <= 0) return false;
+    var st = doc.defaultView && doc.defaultView.getComputedStyle ? doc.defaultView.getComputedStyle(el) : null;
+    if (st && (st.visibility === 'hidden' || st.display === 'none')) return false;
+    return true;
+  }
+
+  function findMenuItemCopyImageExact(root) {
+    var walk = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var n;
+    while ((n = walk.nextNode())) {
+      var v = n.nodeValue != null ? String(n.nodeValue).trim() : '';
+      if (v === '复制图片') {
+        var el = n.parentElement;
+        return el || null;
+      }
+    }
+    return null;
+  }
+
+  function findVisibleJimengContextMenuWithCopy() {
+    var divs = doc.querySelectorAll('div');
+    var i;
+    var d;
+    var cls;
+    for (i = 0; i < divs.length; i++) {
+      d = divs[i];
+      cls = (d.className && String(d.className)) || '';
+      if (cls.indexOf('context-menu-') === -1) continue;
+      if (!isElementVisible(d)) continue;
+      var itemEl = findMenuItemCopyImageExact(d);
+      if (itemEl) return { menuRoot: d, itemEl: itemEl };
+    }
+    return null;
+  }
+
+  function waitJimengClipboardReadFromIsolatedWorld(roundId, previousImageBase64, timeoutMs) {
+    return new Promise(function (resolve) {
+      var reqId =
+        'jimeng_clip_' +
+        String(roundId).slice(0, 8) +
+        '_' +
+        Date.now() +
+        '_' +
+        Math.random().toString(36).slice(2, 9);
+      var finished = false;
+      function onMsg(ev) {
+        if (ev.source !== window) return;
+        var p = ev.data;
+        if (!p || p.picpuckBridge !== true || p.kind !== 'JIMENG_CLIPBOARD_READ_RESULT') return;
+        if (p.requestId !== reqId) return;
+        window.removeEventListener('message', onMsg);
+        finished = true;
+        resolve(p);
+      }
+      window.addEventListener('message', onMsg);
+      try {
+        window.postMessage(
+          {
+            picpuckBridge: true,
+            kind: 'JIMENG_CLIPBOARD_READ_ARM',
+            requestId: reqId,
+            roundId: roundId,
+            previousImageBase64: typeof previousImageBase64 === 'string' ? previousImageBase64 : '',
+          },
+          location.origin,
+        );
+      } catch (e1) {
+        window.removeEventListener('message', onMsg);
+        resolve({ ok: false, code: 'JIMENG_CLIPBOARD_IMAGE_TIMEOUT' });
+        return;
+      }
+      setTimeout(function () {
+        if (finished) return;
+        window.removeEventListener('message', onMsg);
+        resolve({ ok: false, code: 'JIMENG_CLIPBOARD_IMAGE_TIMEOUT' });
+      }, timeoutMs);
+    });
+  }
+
+  /** @param {{ roundId: string }} payload */
+  async function runStep18SubmitPromptEnterIfConfigured(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step18_jimeng_submit_prompt_enter_if_configured';
+    if (!payload || !payload.submitAfterFill) {
+      appendMainLog(roundId, stepKey, 'info', 'Step18.本步跳过+未启用 submitAfterFill');
+      return { ok: true, skipped: true };
+    }
+    var target = findJimengPromptField();
+    if (!target) {
+      appendMainLog(roundId, stepKey, 'info', 'Step18.动作失败+未找到提示词输入区域');
+      return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
+    }
+    try {
+      target.focus();
+    } catch (e0) {
+      /* ignore */
+    }
+    var evDown = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      code: 'Enter',
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true,
+    });
+    var evUp = new KeyboardEvent('keyup', {
+      key: 'Enter',
+      code: 'Enter',
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true,
+    });
+    target.dispatchEvent(evDown);
+    target.dispatchEvent(evUp);
+    appendMainLog(roundId, stepKey, 'info', 'Step18.已在提示词区派发 Enter 键提交');
+    return { ok: true };
+  }
+
+  /** @param {{ roundId: string, enterAtMs: number }} payload */
+  async function runStep19WaitGenerationStarted(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step19_jimeng_wait_generation_started';
+    var enterAtMs = payload && typeof payload.enterAtMs === 'number' ? payload.enterAtMs : Date.now();
+    var deadlineStart = enterAtMs + 120000;
+    while (Date.now() < deadlineStart) {
+      var root = findLatestJimengGenerationRecordRoot(doc);
+      if (root && isJimengRecordGenerating(root)) {
+        appendMainLog(roundId, stepKey, 'info', 'Step19.已检测到生成中状态');
+        return { ok: true };
+      }
+      await delay(200);
+    }
+    appendMainLog(roundId, stepKey, 'info', 'Step19.动作失败+等待生成开始超时');
+    return { ok: false, code: 'JIMENG_GENERATE_START_TIMEOUT' };
+  }
+
+  /** @param {{ roundId: string, enterAtMs: number, expectCount?: number }} payload */
+  async function runStep20WaitGenerationFinished(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step20_jimeng_wait_generation_finished';
+    var enterAtMs = payload && typeof payload.enterAtMs === 'number' ? payload.enterAtMs : Date.now();
+    var deadlineTotal = enterAtMs + 600000;
+    while (Date.now() < deadlineTotal) {
+      var root = findLatestJimengGenerationRecordRoot(doc);
+      if (root && !isJimengRecordGenerating(root)) {
+        var imgs = listJimengResultImagesOrdered(root);
+        if (imgs.length >= 1) {
+          appendMainLog(roundId, stepKey, 'info', 'Step20.生成完成+有效结果图张数=' + imgs.length);
+          return { ok: true, n: imgs.length };
+        }
+      }
+      await delay(350);
+    }
+    var root2 = findLatestJimengGenerationRecordRoot(doc);
+    if (root2 && !isJimengRecordGenerating(root2) && listJimengResultImagesOrdered(root2).length === 0) {
+      appendMainLog(roundId, stepKey, 'info', 'Step20.动作失败+生成结束但无有效结果图');
+      return { ok: false, code: 'JIMENG_GENERATE_NO_OUTPUT' };
+    }
+    appendMainLog(roundId, stepKey, 'info', 'Step20.动作失败+等待生成完成超时');
+    return { ok: false, code: 'JIMENG_GENERATE_WAIT_TIMEOUT' };
+  }
+
+  /** @param {{ roundId: string, n: number }} payload */
+  async function runStep21CollectImagesViaContextMenu(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step21_jimeng_collect_images_via_context_menu';
+    var n = payload && typeof payload.n === 'number' ? payload.n : 0;
+    if (n < 1) {
+      appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图张数无效');
+      return { ok: false, code: 'JIMENG_GENERATE_NO_OUTPUT' };
+    }
+    appendMainLog(roundId, stepKey, 'info', 'Step21.进入步骤');
+    var root = findLatestJimengGenerationRecordRoot(doc);
+    var imgs = listJimengResultImagesOrdered(root);
+    if (imgs.length < n) {
+      appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图数量不足');
+      return { ok: false, code: 'JIMENG_GENERATE_NO_OUTPUT' };
+    }
+    var collected = [];
+    var prevB64 = '';
+    var ii;
+    for (ii = 0; ii < n; ii++) {
+      var imgEl = imgs[ii];
+      var pick = resolveContextMenuTargetForImg(imgEl);
+      if (pick.degraded) {
+        appendMainLog(
+          roundId,
+          stepKey,
+          'debug',
+          'Step21.debug.右键目标已降级为 img 自身 idx=' + ii,
+        );
+      }
+      var card = pick.target;
+      var r = card.getBoundingClientRect();
+      var cx = r.left + Math.min(r.width / 2, 120);
+      var cy = r.top + Math.min(r.height / 2, 120);
+      try {
+        card.dispatchEvent(
+          new MouseEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            button: 2,
+            buttons: 2,
+            clientX: cx,
+            clientY: cy,
+          }),
+        );
+      } catch (eCm) {
+        appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.contextmenuErr ' + (eCm && eCm.message));
+        return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+      }
+      await delay(120);
+      var menuFound = null;
+      var tMenu = Date.now() + 8000;
+      while (Date.now() < tMenu) {
+        menuFound = findVisibleJimengContextMenuWithCopy();
+        if (menuFound) break;
+        await delay(80);
+      }
+      if (!menuFound) {
+        appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+未找到复制图片菜单');
+        return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+      }
+      try {
+        var clickEl = menuFound.itemEl;
+        if (clickEl.click) clickEl.click();
+        else menuFound.menuRoot.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      } catch (eCk) {
+        return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+      }
+      await delay(80);
+      var clipRes = await waitJimengClipboardReadFromIsolatedWorld(roundId, prevB64, 15000);
+      if (!clipRes || !clipRes.ok || typeof clipRes.imageBase64 !== 'string' || !clipRes.imageBase64) {
+        appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+剪贴板读取图片超时或失败');
+        return { ok: false, code: clipRes && clipRes.code ? clipRes.code : 'JIMENG_CLIPBOARD_IMAGE_TIMEOUT' };
+      }
+      prevB64 = clipRes.imageBase64;
+      collected.push({
+        imageBase64: clipRes.imageBase64,
+        contentType: typeof clipRes.contentType === 'string' && clipRes.contentType ? clipRes.contentType : 'image/png',
+      });
+      await delay(200);
+    }
+    appendMainLog(roundId, stepKey, 'info', 'Step21.完成步骤+已收集张数=' + collected.length);
+    return { ok: true, images: collected };
+  }
+
   g.__picpuckJimengImage = {
     runStep07EnsureWorkbenchReady: runStep07EnsureWorkbenchReady,
     runStep08CloseOpenPopovers: runStep08CloseOpenPopovers,
@@ -831,5 +1141,9 @@
     runStep15ExpandAtMentions: runStep15ExpandAtMentions,
     runStep16SetLoggedInMarker: runStep16SetLoggedInMarker,
     runStep17ClickGenerateIfNeeded: runStep17ClickGenerateIfNeeded,
+    runStep18SubmitPromptEnterIfConfigured: runStep18SubmitPromptEnterIfConfigured,
+    runStep19WaitGenerationStarted: runStep19WaitGenerationStarted,
+    runStep20WaitGenerationFinished: runStep20WaitGenerationFinished,
+    runStep21CollectImagesViaContextMenu: runStep21CollectImagesViaContextMenu,
   };
 })();

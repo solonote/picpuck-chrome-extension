@@ -8,6 +8,13 @@
 
   var doc = document;
   var STEP_DELAY_MS = 600;
+  var REF_UPLOAD_POLL_MS = 400;
+  var REF_UPLOAD_COUNT_DEADLINE_MS = 120000;
+  var REF_UPLOAD_PHASE2_MAX_MS = 90000;
+  /** 页内无上传进度控件时，预览芯片数达标后至少再等这么久再认为就绪 */
+  var REF_UPLOAD_NO_SPINNER_MIN_MS = 1000;
+  /** 连续多轮无上传中指示才认为稳定 */
+  var REF_UPLOAD_CLEAR_TICKS = 3;
 
   function appendMainLog(roundId, step, level, message) {
     try {
@@ -281,6 +288,100 @@
     }
   }
 
+  function listGeminiRefPreviewChipRoots() {
+    var chips = doc.querySelectorAll('.uploader-file-preview-container uploader-file-preview');
+    if (chips.length === 0) {
+      chips = doc.querySelectorAll('uploader-file-preview.file-preview-chip');
+    }
+    return chips;
+  }
+
+  /**
+   * 统计可见参考图预览「芯片」数量。Gemini 常将多张图放在**一个** `.uploader-file-preview-container` 内，
+   * 每张图对应一个 `uploader-file-preview`，不能按容器个数与 images.length 对齐。
+   */
+  function countVisibleGeminiRefPreviewChips() {
+    var chips = listGeminiRefPreviewChipRoots();
+    var c = 0;
+    for (var i = 0; i < chips.length; i++) {
+      if (isVisible(chips[i])) c++;
+    }
+    return c;
+  }
+
+  /** @param {Element} root */
+  function geminiRefPreviewShowsUploadProgress(root) {
+    if (!root || !root.querySelector) return false;
+    var spin =
+      root.querySelector('mat-spinner') ||
+      root.querySelector('mat-progress-spinner') ||
+      root.querySelector('[role="progressbar"]') ||
+      root.querySelector('progress');
+    if (spin && isVisible(spin)) return true;
+    if (root.getAttribute && root.getAttribute('aria-busy') === 'true') return true;
+    return false;
+  }
+
+  function anyGeminiRefPreviewUploading() {
+    var chips = listGeminiRefPreviewChipRoots();
+    for (var i = 0; i < chips.length; i++) {
+      if (!isVisible(chips[i])) continue;
+      if (geminiRefPreviewShowsUploadProgress(chips[i])) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 粘贴后等待：可见预览芯片数 ≥ expected，且上传进度消失（无进度条时最短再等 REF_UPLOAD_NO_SPINNER_MIN_MS）。
+   * @param {string} roundId
+   * @param {string} stepKey
+   * @param {number} expectedCount
+   */
+  async function waitGeminiRefUploadsComplete(roundId, stepKey, expectedCount) {
+    var d1 = Date.now() + REF_UPLOAD_COUNT_DEADLINE_MS;
+    while (Date.now() < d1) {
+      if (countVisibleGeminiRefPreviewChips() >= expectedCount) break;
+      await delay(REF_UPLOAD_POLL_MS);
+    }
+    var nVisible = countVisibleGeminiRefPreviewChips();
+    if (nVisible < expectedCount) {
+      appendMainLog(
+        roundId,
+        stepKey,
+        'debug',
+        'Step09.debug.refUploadCountTimeout expected=' + expectedCount + ' chips=' + nVisible,
+      );
+      return { ok: false, code: 'GEMINI_REF_UPLOAD_TIMEOUT', detail: 'preview_chips expected=' + expectedCount + ' visible=' + nVisible };
+    }
+
+    var phase2Start = Date.now();
+    var sawUploading = false;
+    var clearTicks = 0;
+    while (Date.now() - phase2Start < REF_UPLOAD_PHASE2_MAX_MS) {
+      var uploading = anyGeminiRefPreviewUploading();
+      if (uploading) {
+        sawUploading = true;
+        clearTicks = 0;
+      } else {
+        clearTicks++;
+        if (clearTicks >= REF_UPLOAD_CLEAR_TICKS) {
+          if (sawUploading || Date.now() - phase2Start >= REF_UPLOAD_NO_SPINNER_MIN_MS) {
+            appendMainLog(
+              roundId,
+              stepKey,
+              'debug',
+              'Step09.debug.refUploadsReady chips=' + nVisible + ' sawProgress=' + sawUploading,
+            );
+            return { ok: true };
+          }
+        }
+      }
+      await delay(REF_UPLOAD_POLL_MS);
+    }
+    appendMainLog(roundId, stepKey, 'debug', 'Step09.debug.refUploadPhase2Timeout sawProgress=' + sawUploading);
+    return { ok: false, code: 'GEMINI_REF_UPLOAD_TIMEOUT', detail: 'upload_indicator phase2' };
+  }
+
   /** @param {{ roundId: string, effectivePrompt?: string, images?: string[] }} payload */
   async function runStep09GeminiFillInputAndPasteImages(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
@@ -343,7 +444,13 @@
           } catch (e) {
             appendMainLog(roundId, stepKey, 'debug', 'Step09.debug.pasteErr ' + (e && e.message));
           }
-          await delay(150);
+          await delay(200);
+          var waitR = await waitGeminiRefUploadsComplete(roundId, stepKey, images.length);
+          if (!waitR || waitR.ok !== true) {
+            return waitR && waitR.code
+              ? { ok: false, code: waitR.code, detail: waitR.detail || '' }
+              : { ok: false, code: 'GEMINI_REF_UPLOAD_TIMEOUT' };
+          }
         } else {
           try {
             if (document.execCommand) {
@@ -461,6 +568,40 @@
     }
   }
 
+  function findGeminiGeneratedPreviewImg() {
+    var ge = doc.querySelector('generated-image');
+    if (!ge) return null;
+    return ge.querySelector('single-image img.image, img.image');
+  }
+
+  /**
+   * 整图下载按钮过早点击会报错：须等预览图解码完成后再多留 500ms。
+   * @param {string} roundId
+   * @param {string} stepKey
+   */
+  async function waitGeminiGeneratedPreviewSettledBeforeDownload(roundId, stepKey) {
+    var settleDeadline = Date.now() + 30000;
+    while (Date.now() < settleDeadline) {
+      var img = findGeminiGeneratedPreviewImg();
+      if (img) {
+        var ready =
+          (img.complete && img.naturalWidth > 0) || (img.classList && img.classList.contains('loaded'));
+        if (ready) break;
+      }
+      await delay(POLL_MS);
+    }
+    var img2 = findGeminiGeneratedPreviewImg();
+    if (img2 && typeof img2.decode === 'function') {
+      try {
+        await img2.decode();
+      } catch (eDec) {
+        appendMainLog(roundId, stepKey, 'debug', 'Step13.debug.previewDecodeErr ' + (eDec && eDec.message));
+      }
+    }
+    await delay(500);
+    appendMainLog(roundId, stepKey, 'debug', 'Step13.debug.previewSettledBeforeDownload');
+  }
+
   /**
    * 与内容脚本握手：先挂上 BUFFER 临时监听并 ARM_READY，再 arm/点击，避免 BUFFER 早于监听入队。
    * @param {{ roundId?: string, generationEvent?: Record<string, unknown> }} [relayMeta] 剪贴板成功后回传熔炉页记 GENERATION 事件用
@@ -525,6 +666,23 @@
     }
     var captureTimeoutMs =
       payload && typeof payload.captureTimeoutMs === 'number' && payload.captureTimeoutMs > 0 ? payload.captureTimeoutMs : 120000;
+    var btn =
+      doc.querySelector('generated-image button[data-test-id="download-generated-image-button"]') ||
+      doc.querySelector('button[data-test-id="download-generated-image-button"]');
+    if (!btn) {
+      postGeminiClipboardAbort();
+      appendMainLog(roundId, stepKey, 'info', 'Step13.动作失败+未找到下载按钮');
+      return { ok: false, code: 'GEMINI_DOWNLOAD_BUTTON_NOT_FOUND' };
+    }
+    await waitGeminiGeneratedPreviewSettledBeforeDownload(roundId, stepKey);
+    btn =
+      doc.querySelector('generated-image button[data-test-id="download-generated-image-button"]') ||
+      doc.querySelector('button[data-test-id="download-generated-image-button"]');
+    if (!btn) {
+      postGeminiClipboardAbort();
+      appendMainLog(roundId, stepKey, 'info', 'Step13.动作失败+预览就绪后未找到下载按钮');
+      return { ok: false, code: 'GEMINI_DOWNLOAD_BUTTON_NOT_FOUND' };
+    }
     var p = new Promise(function (resolve, reject) {
       var t = setTimeout(function () {
         window.removeEventListener('message', onDone);
@@ -547,15 +705,6 @@
       minByteLength: 1048576,
       mimePrefix: 'image/',
     });
-    var btn =
-      doc.querySelector('generated-image button[data-test-id="download-generated-image-button"]') ||
-      doc.querySelector('button[data-test-id="download-generated-image-button"]');
-    if (!btn) {
-      cap.disarm();
-      postGeminiClipboardAbort();
-      appendMainLog(roundId, stepKey, 'info', 'Step13.动作失败+未找到下载按钮');
-      return { ok: false, code: 'GEMINI_DOWNLOAD_BUTTON_NOT_FOUND' };
-    }
     btn.click();
     try {
       await p;
@@ -567,6 +716,12 @@
       postGeminiClipboardAbort();
       if (msg.indexOf('GEMINI_FULL_IMAGE_CAPTURE_TIMEOUT') !== -1) {
         return { ok: false, code: 'GEMINI_FULL_IMAGE_CAPTURE_TIMEOUT', detail: msg };
+      }
+      if (msg.indexOf('GEMINI_CLIPBOARD_TAB_FOCUS_TIMEOUT') !== -1) {
+        return { ok: false, code: 'GEMINI_CLIPBOARD_TAB_FOCUS_TIMEOUT', detail: msg };
+      }
+      if (msg.indexOf('GEMINI_CLIPBOARD_TAB_FOCUS_UNAVAILABLE') !== -1) {
+        return { ok: false, code: 'GEMINI_CLIPBOARD_TAB_FOCUS_UNAVAILABLE', detail: msg };
       }
       return { ok: false, code: 'GEMINI_CLIPBOARD_FAILED', detail: msg };
     }

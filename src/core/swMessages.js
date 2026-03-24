@@ -5,7 +5,8 @@
 import { PICPUCK_COMMAND, LOG_APPEND } from './runtimeMessages.js';
 import { getCommandRecordByPicpuckAction } from './registry.js';
 import { masterDispatch } from './masterDispatch.js';
-import { geminiRelayCallerTabByRoundId } from './taskBindings.js';
+import { relayJimengGeneratedImagesToCaller } from './jimengRelayGeneratedImages.js';
+import { geminiRelayCallerTabByRoundId, getWorkTabIdByRoundId } from './taskBindings.js';
 import { appendLog, getContext } from './roundContext.js';
 import { getSinkRoundForTab } from './logSink.js';
 import { pushRoundPhaseUi } from './phaseUi.js';
@@ -13,6 +14,61 @@ import { loadLogsForCopy } from './roundLogSnapshot.js';
 
 /** 与 `frontend-v2/src/utils/picpuckExtension.js` 中 PICPUCK_EXTENSION_COMMAND 一致 */
 const PAGE_CMD_TYPE = 'IdlinkExtensionCommand';
+
+function delayMs(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * 内容脚本无 `chrome.tabs`：由 SW 将 Gemini 工作台 Tab 置前并轮询直至页内 `document.hasFocus()` 或超时。
+ * @param {number} tabId
+ * @param {number} maxWaitMs
+ * @param {number} pollMs
+ */
+async function ensureTabAndDocumentFocusedForClipboard(tabId, maxWaitMs, pollMs) {
+  const deadline = Date.now() + maxWaitMs;
+  const settleMs = 150;
+  while (Date.now() < deadline) {
+    let tab;
+    try {
+      tab = await chrome.tabs.get(tabId);
+    } catch {
+      await delayMs(pollMs);
+      continue;
+    }
+    if (!tab || tab.windowId == null) {
+      await delayMs(pollMs);
+      continue;
+    }
+    let hasFocus = false;
+    try {
+      const inj = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => document.hasFocus(),
+      });
+      hasFocus = !!(inj && inj[0] && inj[0].result === true);
+    } catch {
+      hasFocus = false;
+    }
+    if (tab.active && hasFocus) {
+      try {
+        await chrome.windows.update(tab.windowId, { focused: true });
+      } catch {
+        /* 仍认为可尝试写剪贴板 */
+      }
+      await delayMs(settleMs);
+      return;
+    }
+    try {
+      await chrome.windows.update(tab.windowId, { focused: true });
+      await chrome.tabs.update(tabId, { active: true });
+    } catch {
+      /* 继续轮询 */
+    }
+    await delayMs(pollMs);
+  }
+  throw new Error('GEMINI_CLIPBOARD_TAB_FOCUS_TIMEOUT');
+}
 
 /**
  * 安装消息监听；应在 SW 启动时调用一次。
@@ -65,6 +121,37 @@ export function installRuntimeMessageHandlers() {
         return true;
       }
 
+      /** Gemini Step13：CS 无 chrome.tabs，由 SW 在写系统剪贴板前抢焦点（至多 maxWaitMs / 步进 pollMs） */
+      if (payload.action === '__picpuckEnsureTabFocusForClipboard') {
+        const rid = typeof payload.roundId === 'string' ? payload.roundId : '';
+        const fromTask = rid ? getWorkTabIdByRoundId(rid) : undefined;
+        let tabId;
+        if (typeof fromTask === 'number' && fromTask > 0) {
+          tabId = fromTask;
+        } else if (sender.tab && typeof sender.tab.id === 'number') {
+          tabId = sender.tab.id;
+        } else {
+          tabId = undefined;
+        }
+        if (tabId == null) {
+          sendResponse({ ok: false, error: 'GEMINI_CLIPBOARD_TAB_FOCUS_UNAVAILABLE' });
+          return;
+        }
+        const maxWaitMs =
+          typeof payload.maxWaitMs === 'number' && payload.maxWaitMs > 0 ? payload.maxWaitMs : 300000;
+        const pollMs = typeof payload.pollMs === 'number' && payload.pollMs > 0 ? payload.pollMs : 100;
+        (async () => {
+          try {
+            await ensureTabAndDocumentFocusedForClipboard(tabId, maxWaitMs, pollMs);
+            sendResponse({ ok: true });
+          } catch (e) {
+            const m = e instanceof Error ? e.message : String(e);
+            sendResponse({ ok: false, error: m });
+          }
+        })();
+        return true;
+      }
+
       /** Gemini 剪贴板成功后：由 Gemini 页 CS 将整图 base64 转发回发起命令的熔炉标签页（见 picpuckAgentContent） */
       if (payload.action === '__picpuckGeminiRelayGeneratedImage') {
         (async () => {
@@ -91,6 +178,27 @@ export function installRuntimeMessageHandlers() {
               generationEvent,
             });
             geminiRelayCallerTabByRoundId.delete(roundId);
+            sendResponse({ ok: true });
+          } catch (e) {
+            const m = e instanceof Error ? e.message : String(e);
+            sendResponse({ ok: false, error: m });
+          }
+        })();
+        return true;
+      }
+
+      /** 即梦 step22：SW 步骤将多图 base64 转发回发起命令的熔炉标签页 */
+      if (payload.action === '__picpuckJimengRelayGeneratedImages') {
+        (async () => {
+          try {
+            await relayJimengGeneratedImagesToCaller({
+              roundId: typeof payload.roundId === 'string' ? payload.roundId : '',
+              generationEvent:
+                payload.generationEvent && typeof payload.generationEvent === 'object'
+                  ? payload.generationEvent
+                  : null,
+              images: Array.isArray(payload.images) ? payload.images : [],
+            });
             sendResponse({ ok: true });
           } catch (e) {
             const m = e instanceof Error ? e.message : String(e);

@@ -4,7 +4,7 @@
 import { getCommandRecord } from './registry.js';
 import { getOrCreateRoundContext, appendLog, updatePhase, getContext } from './roundContext.js';
 import { releaseExecSlot } from './releaseExecSlot.js';
-import { inFlightByTabId, roundBinding } from './taskBindings.js';
+import { inFlightByTabId, jimengRelayCallerTabByRoundId, roundBinding } from './taskBindings.js';
 import { detachLogSink } from './logSink.js';
 import { persistRoundLogsSnapshot } from './roundLogSnapshot.js';
 import { pushRoundPhaseUi } from './phaseUi.js';
@@ -26,6 +26,7 @@ export async function dispatchRound(args) {
     await releaseExecSlot(tabId);
     inFlightByTabId.delete(tabId);
     roundBinding.delete(roundId);
+    jimengRelayCallerTabByRoundId.delete(roundId);
     detachLogSink(tabId);
     return { phase: 'error' };
   }
@@ -108,6 +109,7 @@ export async function dispatchRound(args) {
     await releaseExecSlot(tabId);
     inFlightByTabId.delete(tabId);
     roundBinding.delete(roundId);
+    jimengRelayCallerTabByRoundId.delete(roundId);
     detachLogSink(tabId);
   }
 

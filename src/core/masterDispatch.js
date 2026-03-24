@@ -5,7 +5,12 @@ import { allocateTab } from './allocateTab.js';
 import { dispatchRound } from './dispatchRound.js';
 import { detachLogSink } from './logSink.js';
 import { releaseExecSlot } from './releaseExecSlot.js';
-import { geminiRelayCallerTabByRoundId, inFlightByTabId, roundBinding } from './taskBindings.js';
+import {
+  geminiRelayCallerTabByRoundId,
+  jimengRelayCallerTabByRoundId,
+  inFlightByTabId,
+  roundBinding,
+} from './taskBindings.js';
 
 /**
  * @param {string} clientRequestId
@@ -42,6 +47,12 @@ export async function masterDispatch(clientRequestId, command, payload, callerTa
     geminiRelayCallerTabByRoundId.set(roundId, callerTabId);
     setTimeout(() => {
       geminiRelayCallerTabByRoundId.delete(roundId);
+    }, 12 * 60 * 1000);
+  }
+  if (command === 'JIMENG_IMAGE_FILL' && callerTabId != null && callerTabId > 0) {
+    jimengRelayCallerTabByRoundId.set(roundId, callerTabId);
+    setTimeout(() => {
+      jimengRelayCallerTabByRoundId.delete(roundId);
     }, 12 * 60 * 1000);
   }
 

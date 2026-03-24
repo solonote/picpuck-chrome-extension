@@ -4,9 +4,11 @@
 import { executeInAllFrames } from '../../core/executeAllFrames.js';
 import { scrollTopViaInjectMain } from '../../core/mainWorldScrollTop.js';
 import { logStepDone, logStepEnter, logStepFail, logStepInfo } from '../../core/stepLog.js';
+import { relayJimengGeneratedImagesToCaller } from '../../core/jimengRelayGeneratedImages.js';
 import { waitForTabUrlWhen } from '../../core/waitTabUrl.js';
 import {
   JIMENG_IMAGE_MAIN_INJECT_FAILED,
+  JIMENG_RELAY_CALLER_GONE,
   JIMENG_WORKBENCH_NOT_READY,
 } from './jimengErrorCodes.js';
 import { JIMENG_AI_TOOL_HOME, isJimengAiToolHomeUrl } from './jimengUrls.js';
@@ -77,6 +79,63 @@ async function execJimengMainRunner(ctx, opts) {
     throw new Error(code);
   }
   logStepDone(tabId, roundId, stepKey, nn, doneMsg);
+}
+
+/**
+ * MAIN 注入；成功时返回页内 `result` 对象（用于 step20/21 读取 `n` / `images`）。
+ * @param {object} ctx dispatchRound 上下文
+ * @param {{ nn: number, stepKey: string, runnerName: string, mainPayload: Record<string, unknown>, failUserMsg: string, startMsg: string, doneMsg: string }} opts
+ */
+async function execJimengMainRunnerWithResult(ctx, opts) {
+  const { tabId, roundId } = ctx;
+  const { nn, stepKey, runnerName, mainPayload, failUserMsg, startMsg, doneMsg } = opts;
+  logStepEnter(tabId, roundId, stepKey, nn, startMsg);
+  try {
+    await ensureJimengImageMainWorldInjected(tabId);
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    logStepFail(tabId, roundId, stepKey, nn, '动作失败+页内即梦脚本注入失败请刷新页面后重试', m.slice(0, 500));
+    throw new Error(JIMENG_IMAGE_MAIN_INJECT_FAILED);
+  }
+  const mergedPayload = { roundId, ...mainPayload };
+  const [injRes] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: async (packed) => {
+      const g = typeof globalThis !== 'undefined' ? globalThis : window;
+      const inj = g.__picpuckJimengImage;
+      if (!inj || typeof inj[packed.runnerName] !== 'function') {
+        return { ok: false, code: 'JIMENG_IMAGE_MAIN_INJECT_FAILED' };
+      }
+      return inj[packed.runnerName](packed.payload);
+    },
+    args: [{ runnerName, payload: mergedPayload }],
+  });
+  const r = injRes?.result;
+  if (!r || r.ok !== true) {
+    const code = r && r.code ? String(r.code) : JIMENG_WORKBENCH_NOT_READY;
+    const detail = r && typeof r.detail === 'string' ? r.detail : '';
+    logStepFail(tabId, roundId, stepKey, nn, failUserMsg, (detail || code).slice(0, 500));
+    throw new Error(code);
+  }
+  logStepDone(tabId, roundId, stepKey, nn, doneMsg);
+  return r;
+}
+
+function jimengPostFillSubmitFlow(payload) {
+  return !!(
+    payload &&
+    typeof payload === 'object' &&
+    payload.fillOnly === true &&
+    payload.submitAfterFill === true
+  );
+}
+
+function generationEventFieldsComplete(payload) {
+  const ge = payload && payload.generationEvent;
+  if (!ge || typeof ge !== 'object') return false;
+  const s = (k) => (typeof ge[k] === 'string' ? ge[k].trim() : '');
+  return !!(s('projectId') && s('subjectType') && s('subjectId') && s('inputPrompt') && s('coreEngine'));
 }
 
 /**
@@ -349,4 +408,124 @@ export async function step17_jimeng_click_generate_if_needed(ctx) {
     startMsg: '按需点击即梦「生成」按钮',
     doneMsg: '生成动作已处理',
   });
+}
+
+/** fillOnly+submitAfterFill：MAIN 派发 Enter；否则跳过 */
+export async function step18_jimeng_submit_prompt_enter_if_configured(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step18_jimeng_submit_prompt_enter_if_configured';
+  if (!jimengPostFillSubmitFlow(payload)) {
+    logStepInfo(tabId, roundId, stepKey, 18, '未启用 submitAfterFill 跳过 Enter 提交');
+    return;
+  }
+  ctx.jimengEnterAtMs = Date.now();
+  await execJimengMainRunner(ctx, {
+    nn: 18,
+    stepKey,
+    runnerName: 'runStep18SubmitPromptEnterIfConfigured',
+    mainPayload: { submitAfterFill: true },
+    failUserMsg: '动作失败+无法在提示词区提交 Enter',
+    startMsg: '在提示词区派发 Enter 键以提交生成',
+    doneMsg: 'Enter 提交已派发',
+  });
+}
+
+/** 等待首条记录出现「生成中」语义，最长 120s */
+export async function step19_jimeng_wait_generation_started(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step19_jimeng_wait_generation_started';
+  if (!jimengPostFillSubmitFlow(payload)) {
+    logStepInfo(tabId, roundId, stepKey, 19, '本步跳过');
+    return;
+  }
+  await execJimengMainRunner(ctx, {
+    nn: 19,
+    stepKey,
+    runnerName: 'runStep19WaitGenerationStarted',
+    mainPayload: { enterAtMs: ctx.jimengEnterAtMs },
+    failUserMsg: '动作失败+等待即梦开始生成超时',
+    startMsg: '等待即梦出现生成中界面',
+    doneMsg: '已检测到生成中状态',
+  });
+}
+
+/** 等待生成结束并统计结果图张数；自 Enter 起总超时 600s */
+export async function step20_jimeng_wait_generation_finished(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step20_jimeng_wait_generation_finished';
+  if (!jimengPostFillSubmitFlow(payload)) {
+    logStepInfo(tabId, roundId, stepKey, 20, '本步跳过');
+    return;
+  }
+  const r = await execJimengMainRunnerWithResult(ctx, {
+    nn: 20,
+    stepKey,
+    runnerName: 'runStep20WaitGenerationFinished',
+    mainPayload: { enterAtMs: ctx.jimengEnterAtMs },
+    failUserMsg: '动作失败+等待即梦生成完成超时或无输出图',
+    startMsg: '等待即梦生成完成并统计结果图',
+    doneMsg: '生成已完成',
+  });
+  ctx.jimengResultImageCount = typeof r.n === 'number' ? r.n : 0;
+}
+
+/** 右键复制图片 + 隔离世界读剪贴板；generationEvent 不齐则跳过并标记 jimengSkipRelay */
+export async function step21_jimeng_collect_images_via_context_menu(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step21_jimeng_collect_images_via_context_menu';
+  if (!jimengPostFillSubmitFlow(payload)) {
+    logStepInfo(tabId, roundId, stepKey, 21, '本步跳过');
+    return;
+  }
+  if (!generationEventFieldsComplete(payload)) {
+    logStepInfo(
+      tabId,
+      roundId,
+      stepKey,
+      21,
+      '缺少 generationEvent 完整字段已跳过图片回传与落库',
+    );
+    ctx.jimengSkipRelay = true;
+    return;
+  }
+  const n = ctx.jimengResultImageCount;
+  const r = await execJimengMainRunnerWithResult(ctx, {
+    nn: 21,
+    stepKey,
+    runnerName: 'runStep21CollectImagesViaContextMenu',
+    mainPayload: { n },
+    failUserMsg: '动作失败+通过右键菜单收集即梦结果图失败',
+    startMsg: '逐张右键复制图片并读取剪贴板',
+    doneMsg: '已收集全部结果图',
+  });
+  ctx.jimengCollectedImages = Array.isArray(r.images) ? r.images : [];
+}
+
+/** 将多图与 generationEvent 回传发起命令的熔炉标签页 */
+export async function step22_jimeng_relay_images_to_caller(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step22_jimeng_relay_images_to_caller';
+  if (!jimengPostFillSubmitFlow(payload)) {
+    logStepInfo(tabId, roundId, stepKey, 22, '本步跳过');
+    return;
+  }
+  if (ctx.jimengSkipRelay === true) {
+    logStepInfo(tabId, roundId, stepKey, 22, '未执行图片回传本步跳过');
+    return;
+  }
+  logStepEnter(tabId, roundId, stepKey, 22, '将生成图回传至熔炉页');
+  const images = ctx.jimengCollectedImages;
+  const ge = payload.generationEvent;
+  try {
+    await relayJimengGeneratedImagesToCaller({
+      roundId,
+      generationEvent: ge,
+      images,
+    });
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    logStepFail(tabId, roundId, stepKey, 22, '动作失败+回传熔炉页失败请保持熔炉页打开', m.slice(0, 500));
+    throw new Error(JIMENG_RELAY_CALLER_GONE);
+  }
+  logStepDone(tabId, roundId, stepKey, 22, '已回传生成图至熔炉页');
 }

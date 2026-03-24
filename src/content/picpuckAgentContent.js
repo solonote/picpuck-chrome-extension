@@ -15,11 +15,15 @@
   const PAGE_CMD = 'IdlinkExtensionCommand';
   /** 与 swMessages 中 `tabs.sendMessage` 的 type 一致：SW → 熔炉页 CS → window.postMessage */
   const PICPUCK_GEMINI_GENERATED_IMAGE = 'PICPUCK_GEMINI_GENERATED_IMAGE';
+  const PICPUCK_JIMENG_GENERATED_IMAGES = 'PICPUCK_JIMENG_GENERATED_IMAGES';
 
   const TOPBAR_ID = 'picpuck-agent-topbar';
   const COPY_FLASH_MS = 300;
   const COPY_FLASH_COLOR = '#1a3d1a';
   const TRIPLE_CLICK_MS = 600;
+  /** Gemini Step13：整图已拦截后，在写系统剪贴板前争取把本 Tab 切回前台（用户可暂时离开） */
+  const CLIPBOARD_TAB_FOCUS_MAX_MS = 5 * 60 * 1000;
+  const CLIPBOARD_TAB_FOCUS_POLL_MS = 100;
 
   /** Gemini step13：仅在 ARM～BUFFER/ABORT 之间挂一次监听，处理完或中止即移除 */
   let geminiClipboardBufferListener = null;
@@ -52,19 +56,58 @@
   }
 
   /**
-   * 扩展在后台标签写剪贴板时浏览器常拒（文档未聚焦）；先激活本标签所在窗口与标签再写。
+   * 整图已就绪后、写系统剪贴板前：内容脚本**没有** `chrome.tabs`（读 `getCurrent` 会抛错）。
+   * 通过 SW 在至多 maxWaitMs 内每 pollMs 将本 Tab 置前并确认页内 `document.hasFocus()`。
    */
-  async function focusThisTabForClipboardWrite() {
-    try {
-      if (!extensionRuntimeOk() || typeof chrome.tabs.getCurrent !== 'function') return;
-      const tab = await chrome.tabs.getCurrent();
-      if (!tab || tab.id == null || tab.windowId == null) return;
-      await chrome.windows.update(tab.windowId, { focused: true });
-      await chrome.tabs.update(tab.id, { active: true });
-      await new Promise((r) => setTimeout(r, 150));
-    } catch {
-      /* 仍尝试写剪贴板 */
+  /**
+   * @param {number} maxWaitMs
+   * @param {number} pollMs
+   * @param {string} [roundId] 传入则 SW 优先用 taskBindings 解析工作台 tabId（与 sender.tab 双保险）
+   */
+  async function ensureThisTabActiveForClipboardOrThrow(maxWaitMs, pollMs, roundId) {
+    if (!extensionRuntimeOk()) {
+      throw new Error('GEMINI_CLIPBOARD_TAB_FOCUS_UNAVAILABLE');
     }
+    return new Promise((resolve, reject) => {
+      try {
+        const payload = {
+          action: '__picpuckEnsureTabFocusForClipboard',
+          maxWaitMs,
+          pollMs,
+        };
+        if (roundId && typeof roundId === 'string') payload.roundId = roundId;
+        chrome.runtime.sendMessage(
+          {
+            type: PICPUCK_COMMAND,
+            payload,
+          },
+          (response) => {
+            let lastErr = '';
+            try {
+              lastErr = chrome.runtime.lastError ? String(chrome.runtime.lastError.message || '') : '';
+            } catch {
+              reject(new Error('GEMINI_CLIPBOARD_TAB_FOCUS_UNAVAILABLE'));
+              return;
+            }
+            if (lastErr) {
+              reject(new Error(lastErr || 'GEMINI_CLIPBOARD_TAB_FOCUS_UNAVAILABLE'));
+              return;
+            }
+            if (response && response.ok === true) {
+              resolve();
+              return;
+            }
+            const errMsg =
+              response && typeof response.error === 'string' && response.error
+                ? response.error
+                : 'GEMINI_CLIPBOARD_TAB_FOCUS_TIMEOUT';
+            reject(new Error(errMsg));
+          },
+        );
+      } catch (e) {
+        reject(e instanceof Error ? e : new Error(String(e)));
+      }
+    });
   }
 
   /**
@@ -101,8 +144,17 @@
     }
   }
 
-  async function writeImageBufferToSystemClipboard(buf, contentType) {
-    await focusThisTabForClipboardWrite();
+  /**
+   * @param {ArrayBuffer} buf
+   * @param {string} contentType
+   * @param {string} [roundId]
+   */
+  async function writeImageBufferToSystemClipboard(buf, contentType, roundId) {
+    await ensureThisTabActiveForClipboardOrThrow(
+      CLIPBOARD_TAB_FOCUS_MAX_MS,
+      CLIPBOARD_TAB_FOCUS_POLL_MS,
+      roundId,
+    );
     let mime = typeof contentType === 'string' ? contentType.split(';')[0].trim().toLowerCase() : '';
     if (!mime.startsWith('image/')) mime = 'image/png';
     const blob = new Blob([buf], { type: mime });
@@ -324,6 +376,25 @@
     left.addEventListener('click', onLeftClick);
   }
 
+  function delayMsJimeng(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  /**
+   * @param {Blob} blob
+   * @returns {Promise<string>}
+   */
+  async function blobToBase64Pure(blob) {
+    const ab = await blob.arrayBuffer();
+    const u8 = new Uint8Array(ab);
+    const CH = 0x8000;
+    let bin = '';
+    for (let i = 0; i < u8.length; i += CH) {
+      bin += String.fromCharCode.apply(null, u8.subarray(i, Math.min(i + CH, u8.length)));
+    }
+    return btoa(bin);
+  }
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg || typeof msg !== 'object') return;
     const safeRespond = (obj) => {
@@ -340,6 +411,22 @@
             type: 'IdlinkExtensionGeminiGeneratedImage',
             imageBase64: msg.imageBase64,
             contentType: msg.contentType,
+            generationEvent: msg.generationEvent,
+          },
+          window.location.origin,
+        );
+        safeRespond({ ok: true });
+      } catch (e) {
+        safeRespond({ ok: false });
+      }
+      return;
+    }
+    if (msg.type === PICPUCK_JIMENG_GENERATED_IMAGES) {
+      try {
+        window.postMessage(
+          {
+            type: 'IdlinkExtensionJimengGeneratedImages',
+            images: msg.images,
             generationEvent: msg.generationEvent,
           },
           window.location.origin,
@@ -367,6 +454,61 @@
     // MAIN 世界无 chrome.*，由页面 postMessage 经此桥到 SW
     if (d && d.picpuckBridge === true && d.kind === 'LOG_APPEND' && d.entry) {
       safeRuntimeSendMessage({ type: LOG_APPEND, entry: d.entry });
+      return;
+    }
+    if (d && d.picpuckBridge === true && d.kind === 'JIMENG_CLIPBOARD_READ_ARM') {
+      const requestId = typeof d.requestId === 'string' ? d.requestId : '';
+      const prevB64 = typeof d.previousImageBase64 === 'string' ? d.previousImageBase64 : '';
+      (async () => {
+        const reply = (obj) => {
+          try {
+            window.postMessage(
+              {
+                picpuckBridge: true,
+                kind: 'JIMENG_CLIPBOARD_READ_RESULT',
+                requestId,
+                ...obj,
+              },
+              window.location.origin,
+            );
+          } catch (_) {
+            /* ignore */
+          }
+        };
+        const deadline = Date.now() + 15000;
+        while (Date.now() < deadline) {
+          try {
+            if (!navigator.clipboard || typeof navigator.clipboard.read !== 'function') {
+              await delayMsJimeng(150);
+              continue;
+            }
+            const items = await navigator.clipboard.read();
+            let pickedB64 = '';
+            let pickedCt = 'image/png';
+            const order = ['image/png', 'image/jpeg', 'image/webp'];
+            outer: for (const item of items) {
+              const types = Array.isArray(item.types) ? item.types : [];
+              for (let oi = 0; oi < order.length; oi += 1) {
+                const mime = order[oi];
+                if (!types.includes(mime)) continue;
+                const blob = await item.getType(mime);
+                const b64 = await blobToBase64Pure(blob);
+                pickedB64 = b64;
+                pickedCt = mime;
+                break outer;
+              }
+            }
+            if (pickedB64 && pickedB64 !== prevB64) {
+              reply({ ok: true, imageBase64: pickedB64, contentType: pickedCt });
+              return;
+            }
+          } catch (_) {
+            /* 继续轮询 */
+          }
+          await delayMsJimeng(150);
+        }
+        reply({ ok: false, code: 'JIMENG_CLIPBOARD_IMAGE_TIMEOUT' });
+      })();
       return;
     }
     /** MAIN 先发 ARM，本处挂上 BUFFER 专用监听后再 ARM_READY，避免 BUFFER 早于监听 */
@@ -400,7 +542,7 @@
                 bufForRelay = null;
               }
             }
-            await writeImageBufferToSystemClipboard(buf, ctRaw);
+            await writeImageBufferToSystemClipboard(buf, ctRaw, relayRoundId || undefined);
             ok = true;
           } catch (e) {
             err = e instanceof Error ? e.message : String(e);
