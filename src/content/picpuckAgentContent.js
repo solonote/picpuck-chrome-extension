@@ -1,6 +1,6 @@
 /* global chrome */
 /**
- * 内容脚本（隔离世界）：在即梦/Gemini 注入顶栏 `#picpuck-agent-topbar`；本站（如 localhost）仅作 postMessage→SW 桥，不显示顶栏。
+ * 内容脚本（隔离世界）：在即梦/Gemini **且 Tab 位于 PicPuck 蓝组内**时注入顶栏 `#picpuck-agent-topbar`；本站（如 localhost）仅作 postMessage→SW 桥，不显示顶栏。
  *
  * - §4.1：左「当前轮次」（三连击）+ 中「等待/执行中」相对整条顶栏几何水平居中 + 右 Step 摘要（右对齐，`title` 全文）
  * - §4.2：600ms 内三次点击左侧 → 向 SW 索取日志 JSON 并写入剪贴板（含 session 快照，避免 SW 休眠丢日志）
@@ -40,9 +40,9 @@
   }
 
   /**
-   * 顶栏仅用于即梦 / Gemini 工作台；localhost 等本站仅保留 postMessage→SW 桥，不注入 UI。
+   * 顶栏目标站点（即梦 / Gemini）；是否与 PicPuck 工作区同组由 `shouldShowWorkspaceTopbar` 判定。
    */
-  function showPicpuckAgentTopbar() {
+  function isWorkspaceSiteHost() {
     try {
       const h = String(location.hostname || '').toLowerCase();
       if (h === 'gemini.google.com') return true;
@@ -52,11 +52,47 @@
     }
   }
 
-  /** 升级扩展后移除曾注入在本站（如 localhost）的顶栏残留 */
-  function removeStalePicpuckTopbar() {
-    if (showPicpuckAgentTopbar()) return;
+  function removePicpuckTopbarDom() {
     const el = document.getElementById(TOPBAR_ID);
     if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  /**
+   * 由 SW 读取 `tabs` + session 中 PicPuck 组映射，与 `allocateTab` 候选规则一致。
+   * @returns {Promise<boolean>}
+   */
+  function shouldShowWorkspaceTopbar() {
+    if (!isWorkspaceSiteHost()) return Promise.resolve(false);
+    if (!extensionRuntimeOk()) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(
+          { type: PICPUCK_COMMAND, payload: { action: '__picpuckWorkspaceTopbarEligible' } },
+          (res) => {
+            let lastErr = '';
+            try {
+              lastErr = chrome.runtime.lastError ? String(chrome.runtime.lastError.message || '') : '';
+            } catch {
+              lastErr = '';
+            }
+            if (lastErr) {
+              resolve(false);
+              return;
+            }
+            resolve(!!(res && res.ok && res.eligible === true));
+          },
+        );
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
+  /** 升级扩展后移除曾注入在本站（如 localhost）的顶栏残留；非工作台域名必清 DOM */
+  function removeStalePicpuckTopbar() {
+    if (!isWorkspaceSiteHost()) {
+      removePicpuckTopbarDom();
+    }
   }
 
   /**
@@ -295,7 +331,7 @@
 
   /** 若尚无根节点则创建；与 allocateTab 注入的裸根节点共存，仅补全左右子节点与样式 */
   function ensureTopbarShell() {
-    if (!showPicpuckAgentTopbar()) {
+    if (!isWorkspaceSiteHost()) {
       return { root: null, left: null, center: null, right: null };
     }
     let root = document.getElementById(TOPBAR_ID);
@@ -344,8 +380,11 @@
     return { root, left, center, right };
   }
 
-  function applyRoundPhase(payload) {
-    if (!showPicpuckAgentTopbar()) return;
+  async function applyRoundPhase(payload) {
+    if (!(await shouldShowWorkspaceTopbar())) {
+      removePicpuckTopbarDom();
+      return;
+    }
     const { root, left, center, right } = ensureTopbarShell();
     if (!root || !left || !center || !right) return;
     const phase = payload && payload.phase != null ? String(payload.phase) : 'idle';
@@ -422,8 +461,8 @@
     }
   }
 
-  function wireLeftClick() {
-    if (!showPicpuckAgentTopbar()) return;
+  async function wireLeftClick() {
+    if (!(await shouldShowWorkspaceTopbar())) return;
     const { left } = ensureTopbarShell();
     if (!left) return;
     left.removeEventListener('click', onLeftClick);
@@ -531,8 +570,14 @@
       return;
     }
     if (msg.type === ROUND_PHASE) {
-      applyRoundPhase(msg.payload);
-      wireLeftClick();
+      void (async () => {
+        try {
+          await applyRoundPhase(msg.payload);
+          await wireLeftClick();
+        } catch {
+          /* ignore */
+        }
+      })();
       safeRespond({ ok: true });
       return;
     }
@@ -544,21 +589,6 @@
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     const d = event.data;
-    if (d && d.type === 'PICPUCK_MCUP_ASYNC' && d.kind === 'SET_ACCESS_TOKEN') {
-      const token = typeof d.token === 'string' ? d.token.trim() : '';
-      const apiBase = typeof d.apiBase === 'string' ? d.apiBase.trim() : '';
-      if (token) {
-        try {
-          chrome.storage.session.set({
-            picpuckMcupExtensionAccessToken: token,
-            picpuckMcupApiBase: apiBase,
-          });
-        } catch (_) {
-          /* ignore */
-        }
-      }
-      return;
-    }
     // MAIN 世界无 chrome.*，由页面 postMessage 经此桥到 SW
     if (d && d.picpuckBridge === true && d.kind === 'LOG_APPEND' && d.entry) {
       safeRuntimeSendMessage({ type: LOG_APPEND, entry: d.entry });
@@ -752,13 +782,18 @@
 
   const idlePayload = { phase: 'idle', roundIdShort: '—', lastInfoMessage: '' };
 
-  function initTopbarIfWorkbench() {
+  async function initTopbarIfWorkbench() {
     removeStalePicpuckTopbar();
-    if (!showPicpuckAgentTopbar()) return;
+    if (!isWorkspaceSiteHost()) return;
+    const eligible = await shouldShowWorkspaceTopbar();
+    if (!eligible) {
+      removePicpuckTopbarDom();
+      return;
+    }
     ensureTopbarShell();
-    function finishTopbarPhase(payload) {
-      applyRoundPhase(payload);
-      wireLeftClick();
+    async function finishTopbarPhase(payload) {
+      await applyRoundPhase(payload);
+      await wireLeftClick();
     }
     try {
       chrome.runtime.sendMessage(
@@ -770,22 +805,22 @@
           } catch {
             err = '';
           }
-          if (!err && res && res.ok === true && res.phasePayload && typeof res.phasePayload === 'object') {
-            finishTopbarPhase(res.phasePayload);
-          } else {
-            finishTopbarPhase(idlePayload);
-          }
+          const payload =
+            !err && res && res.ok === true && res.phasePayload && typeof res.phasePayload === 'object'
+              ? res.phasePayload
+              : idlePayload;
+          void finishTopbarPhase(payload);
         },
       );
     } catch {
-      finishTopbarPhase(idlePayload);
+      void finishTopbarPhase(idlePayload);
     }
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initTopbarIfWorkbench);
+    document.addEventListener('DOMContentLoaded', () => void initTopbarIfWorkbench());
   } else {
-    initTopbarIfWorkbench();
+    void initTopbarIfWorkbench();
   }
 
   /** Gemini：URL 带 picpuck_net_hook=1 或 =all 时注入 MAIN 世界网络测试钩子（控制台看 [PicPuck net-test]） */

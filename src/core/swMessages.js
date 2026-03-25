@@ -21,6 +21,7 @@ import {
   geminiRelayForwardEnd,
 } from './relayImagePayloadChunked.js';
 import { handlePicpuckAsyncGeneration } from './asyncGenerationHandlers.js';
+import { isTabInPicpuckWorkspaceGroup } from './picpuckWorkspaceTabGroup.js';
 
 /** 与 `frontend-v2/src/utils/picpuckExtension.js` 中 PICPUCK_EXTENSION_COMMAND 一致 */
 const PAGE_CMD_TYPE = 'IdlinkExtensionCommand';
@@ -126,6 +127,24 @@ export function installRuntimeMessageHandlers() {
         return true;
       }
       // 为遵守「仅三种 runtime type」约定：内部动作走 PICPUCK_COMMAND，不新增第四 type（见分阶段清单说明）
+      /** 即梦/Gemini：仅 PicPuck 蓝组内 Tab 显示顶栏；CS 无可靠 tabs API 时由 SW 判定 */
+      if (payload.action === '__picpuckWorkspaceTopbarEligible') {
+        (async () => {
+          try {
+            const tabId = sender.tab?.id;
+            if (tabId == null) {
+              sendResponse({ ok: true, eligible: false });
+              return;
+            }
+            const tab = await chrome.tabs.get(tabId);
+            const eligible = await isTabInPicpuckWorkspaceGroup(tab);
+            sendResponse({ ok: true, eligible });
+          } catch {
+            sendResponse({ ok: true, eligible: false });
+          }
+        })();
+        return true;
+      }
       /** 内容脚本顶栏重建后（如整页导航）：从 SW 内存恢复当前轮次 phase，避免一直显示 idle */
       if (payload.action === '__picpuckSyncTopbarFromSw') {
         const tabId = sender.tab?.id;

@@ -87,6 +87,27 @@
     );
   }
 
+  /**
+   * Gemini UI phase-1：`input-area-v2` + `simplified-input-menu`，工具入口为「+」而非旧版 toolbox 条上的「工具」。
+   * 先点此按钮展开 `toolbox-drawer`，再点 `toolbox-drawer-item`「制作图片」（与旧版第二步相同）。
+   */
+  function findSimplifiedInputToolboxMenuButton() {
+    var byLabel = doc.querySelector(
+      'button[aria-label="打开输入区域菜单，以选择工具和上传内容类型"]',
+    );
+    if (byLabel && isVisible(byLabel)) return byLabel;
+    var menus = doc.querySelectorAll('simplified-input-menu button.menu-button.open');
+    for (var mi = 0; mi < menus.length; mi++) {
+      if (isVisible(menus[mi])) return menus[mi];
+    }
+    var addHost = doc.querySelector('simplified-input-menu mat-icon[data-mat-icon-name="add_2"]');
+    if (addHost && addHost.closest) {
+      var addBtn = addHost.closest('button');
+      if (addBtn && isVisible(addBtn)) return addBtn;
+    }
+    return null;
+  }
+
   function isAlreadyMakeImageMode() {
     var deselect = doc.querySelector('button.toolbox-drawer-item-deselect-button') || doc.querySelector('button[aria-label*="取消选择"]');
     if (deselect) {
@@ -125,8 +146,22 @@
         var btn =
           items[i].querySelector('button.toolbox-drawer-item-list-button') ||
           items[i].querySelector('button[class*="toolbox-drawer-item-list-button"]') ||
+          items[i].querySelector('button[role="menuitemcheckbox"]') ||
           items[i].querySelector('button');
         if (btn) return btn;
+      }
+    }
+    var byPhoto = doc.querySelector(
+      'toolbox-drawer-item mat-icon[data-mat-icon-name="photo_prints"]',
+    );
+    if (byPhoto && byPhoto.closest) {
+      var row = byPhoto.closest('toolbox-drawer-item');
+      if (row) {
+        var phBtn =
+          row.querySelector('button.toolbox-drawer-item-list-button') ||
+          row.querySelector('button[role="menuitemcheckbox"]') ||
+          row.querySelector('button');
+        if (phBtn && isVisible(phBtn)) return phBtn;
       }
     }
     var label = doc.querySelector('div.label.gds-label-l');
@@ -155,19 +190,41 @@
       appendMainLog(roundId, stepKey, 'debug', 'Step06.debug.alreadyMakeImage');
       return { ok: true };
     }
-    while (wc < maxWait) {
-      var toolBtn = findToolButton();
-      if (clickWhenVisible(function () {
-        return toolBtn;
-      })) {
-        appendMainLog(roundId, stepKey, 'debug', 'Step06.debug.clickedTool');
-        await delay(STEP_DELAY_MS);
-        break;
+    var openedDrawer = false;
+    if (findSimplifiedInputToolboxMenuButton()) {
+      wc = 0;
+      while (wc < maxWait) {
+        if (
+          clickWhenVisible(function () {
+            return findSimplifiedInputToolboxMenuButton();
+          })
+        ) {
+          appendMainLog(roundId, stepKey, 'debug', 'Step06.debug.clickedSimplifiedInputToolboxMenu');
+          await delay(STEP_DELAY_MS);
+          openedDrawer = true;
+          break;
+        }
+        wc++;
+        await delay(300);
       }
-      wc++;
-      await delay(300);
     }
-    if (wc >= maxWait) {
+    if (!openedDrawer) {
+      wc = 0;
+      while (wc < maxWait) {
+        var toolBtn = findToolButton();
+        if (clickWhenVisible(function () {
+          return toolBtn;
+        })) {
+          appendMainLog(roundId, stepKey, 'debug', 'Step06.debug.clickedTool');
+          await delay(STEP_DELAY_MS);
+          openedDrawer = true;
+          break;
+        }
+        wc++;
+        await delay(300);
+      }
+    }
+    if (!openedDrawer) {
       return { ok: false, code: 'GEMINI_UI_NOT_READY' };
     }
     wc = 0;
@@ -337,6 +394,64 @@
    * @param {string} stepKey
    * @param {number} expectedCount
    */
+  /**
+   * Gemini 输入区：Enter 会提交；提示词内换行须用软换行（insertLineBreak / Shift+Enter），不可整段 insertText 含 \\n。
+   */
+  async function insertGeminiEditorTextWithSoftLineBreaks(inputEl, rawText) {
+    var s = typeof rawText === 'string' ? rawText : '';
+    if (!s || !document.execCommand) return;
+    var lines = s.split(/\r\n|\n|\r/);
+    var li;
+    for (li = 0; li < lines.length; li++) {
+      if (li > 0) {
+        var broke = false;
+        try {
+          broke = document.execCommand('insertLineBreak', false, null);
+        } catch (eLb) {
+          broke = false;
+        }
+        if (!broke) {
+          try {
+            inputEl.dispatchEvent(
+              new KeyboardEvent('keydown', {
+                key: 'Enter',
+                code: 'Enter',
+                keyCode: 13,
+                which: 13,
+                shiftKey: true,
+                bubbles: true,
+                cancelable: true,
+              }),
+            );
+            inputEl.dispatchEvent(
+              new KeyboardEvent('keyup', {
+                key: 'Enter',
+                code: 'Enter',
+                keyCode: 13,
+                which: 13,
+                shiftKey: true,
+                bubbles: true,
+                cancelable: true,
+              }),
+            );
+          } catch (eSk) {
+            /* ignore */
+          }
+        }
+        await delay(45);
+      }
+      var seg = lines[li];
+      if (seg) {
+        try {
+          document.execCommand('insertText', false, seg);
+        } catch (eIt) {
+          /* ignore */
+        }
+        await delay(25);
+      }
+    }
+  }
+
   async function waitGeminiRefUploadsComplete(roundId, stepKey, expectedCount) {
     var d1 = Date.now() + REF_UPLOAD_COUNT_DEADLINE_MS;
     while (Date.now() < d1) {
@@ -426,10 +541,11 @@
           for (pi = 0; pi < parts.length; pi++) {
             var part = parts[pi];
             if (part.type === 'text' && part.value && document.execCommand) {
-              document.execCommand('insertText', false, part.value);
+              await insertGeminiEditorTextWithSoftLineBreaks(inputEl, part.value);
             }
             if (part.type === 'image' && document.execCommand) {
               document.execCommand('insertText', false, '(参考图片' + part.index + ')');
+              await delay(30);
             }
           }
           var dt = new DataTransfer();
@@ -455,16 +571,13 @@
           try {
             if (document.execCommand) {
               document.execCommand('selectAll', false, null);
-              document.execCommand('insertText', false, text);
+              document.execCommand('delete', false, null);
             }
-            if (inputEl.textContent !== text && inputEl.innerText !== text) {
-              inputEl.textContent = text;
-              inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-          } catch (err2) {
+          } catch (errClr) {
             /* ignore */
           }
-          await delay(150);
+          await insertGeminiEditorTextWithSoftLineBreaks(inputEl, text);
+          await delay(120);
         }
         return { ok: true };
       }
@@ -510,6 +623,49 @@
 
   var WAIT_GENERATED_MS = 180000;
   var POLL_MS = 400;
+  /** 预览图已加载后至点击「下载完整尺寸」前的固定等待，避免服务端/按钮态未就绪 */
+  var GEMINI_DOWNLOAD_POST_LOAD_DELAY_MS = 3000;
+
+  /**
+   * 生成结果在 `model-response` 内；用户上传预览在 `user-query`（如 img[data-test-id="uploaded-img"]），
+   * 不得与 `generated-image` 混淆。取**文档顺序最后一个**含可见 `generated-image` 的 `model-response`（即本轮新生成块）。
+   */
+  function findLatestGeminiGeneratedImageHost() {
+    var mrs = Array.prototype.slice.call(doc.querySelectorAll('model-response'));
+    var i;
+    var j;
+    for (i = mrs.length - 1; i >= 0; i--) {
+      var mr = mrs[i];
+      if (!isVisible(mr)) continue;
+      var inMr = mr.querySelectorAll('generated-image');
+      for (j = inMr.length - 1; j >= 0; j--) {
+        var ge = inMr[j];
+        if (isVisible(ge)) return ge;
+      }
+    }
+    var all = Array.prototype.slice.call(doc.querySelectorAll('generated-image'));
+    for (i = all.length - 1; i >= 0; i--) {
+      if (isVisible(all[i]) && !(all[i].closest && all[i].closest('user-query'))) return all[i];
+    }
+    return null;
+  }
+
+  function getGeminiGeneratedPreviewSrcFromHost(ge) {
+    if (!ge) return '';
+    var img = ge.querySelector('single-image img.image, img.image');
+    return img && img.getAttribute ? String(img.getAttribute('src') || '').trim() : '';
+  }
+
+  function hasVisibleLoaderInGeneratedHost(ge) {
+    if (!ge) return false;
+    var img = ge.querySelector('single-image img.image, img.image');
+    if (img) {
+      if (img.classList && img.classList.contains('loaded')) return false;
+      if (img.complete && img.naturalWidth > 0) return false;
+    }
+    var loader = ge.querySelector('div.loader');
+    return !!(loader && isVisible(loader));
+  }
 
   /** 无工作台特征则本 document 非 Gemini 主 UI（如广告 iframe），避免 allFrames 时空转 WAIT_GENERATED_MS */
   function geminiWorkbenchLikelyInThisDocument() {
@@ -517,7 +673,9 @@
       return !!(
         doc.querySelector('rich-textarea .ql-editor') ||
         doc.querySelector('[aria-label="为 Gemini 输入提示"]') ||
+        doc.querySelector('input-area-v2') ||
         doc.querySelector('toolbox-drawer') ||
+        doc.querySelector('model-response') ||
         doc.querySelector('generated-image')
       );
     } catch (eW) {
@@ -532,27 +690,46 @@
     if (!geminiWorkbenchLikelyInThisDocument()) {
       return { ok: false, code: 'GEMINI_STEP12_SKIP_FRAME' };
     }
+    var baselineHost = findLatestGeminiGeneratedImageHost();
+    var baselineSrc = getGeminiGeneratedPreviewSrcFromHost(baselineHost);
+    if (baselineSrc && baselineSrc.indexOf('googleusercontent') !== -1) {
+      appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.baselinePrevGen len=' + baselineSrc.length);
+    } else {
+      appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.baselineNoPrev');
+    }
     var deadline = Date.now() + WAIT_GENERATED_MS;
     while (Date.now() < deadline) {
-      var ge = doc.querySelector('generated-image');
-      if (ge) {
-        var img = ge.querySelector('single-image img.image, img.image');
-        var src = img && (img.getAttribute('src') || '');
-        if (src && src.indexOf('googleusercontent') !== -1) {
-          if (img.classList && img.classList.contains('loaded')) {
-            appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.loadedClass');
-            return { ok: true };
-          }
-          if (img.complete && img.naturalWidth > 0) {
-            appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.naturalSize');
-            return { ok: true };
-          }
-        }
-        var loader = ge.querySelector('div.loader');
-        if (!loader && img && src) {
-          appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.noLoaderHasSrc');
-          return { ok: true };
-        }
+      var latest = findLatestGeminiGeneratedImageHost();
+      if (!latest) {
+        await delay(POLL_MS);
+        continue;
+      }
+      var img = latest.querySelector('single-image img.image, img.image');
+      var src = img && (img.getAttribute('src') || '');
+      if (!src || src.indexOf('googleusercontent') === -1) {
+        await delay(POLL_MS);
+        continue;
+      }
+      if (baselineSrc && src === baselineSrc) {
+        await delay(POLL_MS);
+        continue;
+      }
+      if (hasVisibleLoaderInGeneratedHost(latest)) {
+        await delay(POLL_MS);
+        continue;
+      }
+      if (img.classList && img.classList.contains('loaded')) {
+        appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.loadedClass');
+        return { ok: true };
+      }
+      if (img.complete && img.naturalWidth > 0) {
+        appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.naturalSize');
+        return { ok: true };
+      }
+      var loader = latest.querySelector('div.loader');
+      if (!loader && img && src) {
+        appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.noLoaderHasSrc');
+        return { ok: true };
       }
       await delay(POLL_MS);
     }
@@ -569,13 +746,25 @@
   }
 
   function findGeminiGeneratedPreviewImg() {
-    var ge = doc.querySelector('generated-image');
+    var ge = findLatestGeminiGeneratedImageHost();
     if (!ge) return null;
     return ge.querySelector('single-image img.image, img.image');
   }
 
+  function findGeminiDownloadButtonInLatestHost() {
+    var ge = findLatestGeminiGeneratedImageHost();
+    if (ge) {
+      var b = ge.querySelector('button[data-test-id="download-generated-image-button"]');
+      if (b) return b;
+    }
+    return (
+      doc.querySelector('generated-image button[data-test-id="download-generated-image-button"]') ||
+      doc.querySelector('button[data-test-id="download-generated-image-button"]')
+    );
+  }
+
   /**
-   * 整图下载按钮过早点击会报错：须等预览图解码完成后再多留 500ms。
+   * 整图下载按钮过早点击会报错：须等预览图解码完成后再等待 GEMINI_DOWNLOAD_POST_LOAD_DELAY_MS 再点击。
    * @param {string} roundId
    * @param {string} stepKey
    */
@@ -598,7 +787,7 @@
         appendMainLog(roundId, stepKey, 'debug', 'Step13.debug.previewDecodeErr ' + (eDec && eDec.message));
       }
     }
-    await delay(500);
+    await delay(GEMINI_DOWNLOAD_POST_LOAD_DELAY_MS);
     appendMainLog(roundId, stepKey, 'debug', 'Step13.debug.previewSettledBeforeDownload');
   }
 
@@ -666,18 +855,14 @@
     }
     var captureTimeoutMs =
       payload && typeof payload.captureTimeoutMs === 'number' && payload.captureTimeoutMs > 0 ? payload.captureTimeoutMs : 120000;
-    var btn =
-      doc.querySelector('generated-image button[data-test-id="download-generated-image-button"]') ||
-      doc.querySelector('button[data-test-id="download-generated-image-button"]');
+    var btn = findGeminiDownloadButtonInLatestHost();
     if (!btn) {
       postGeminiClipboardAbort();
       appendMainLog(roundId, stepKey, 'info', 'Step13.动作失败+未找到下载按钮');
       return { ok: false, code: 'GEMINI_DOWNLOAD_BUTTON_NOT_FOUND' };
     }
     await waitGeminiGeneratedPreviewSettledBeforeDownload(roundId, stepKey);
-    btn =
-      doc.querySelector('generated-image button[data-test-id="download-generated-image-button"]') ||
-      doc.querySelector('button[data-test-id="download-generated-image-button"]');
+    btn = findGeminiDownloadButtonInLatestHost();
     if (!btn) {
       postGeminiClipboardAbort();
       appendMainLog(roundId, stepKey, 'info', 'Step13.动作失败+预览就绪后未找到下载按钮');

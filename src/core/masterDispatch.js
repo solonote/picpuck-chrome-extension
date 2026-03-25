@@ -5,12 +5,8 @@ import { allocateTab } from './allocateTab.js';
 import { dispatchRound } from './dispatchRound.js';
 import { detachLogSink } from './logSink.js';
 import { releaseExecSlot } from './releaseExecSlot.js';
-import {
-  geminiRelayCallerTabByRoundId,
-  jimengRelayCallerTabByRoundId,
-  inFlightByTabId,
-  roundBinding,
-} from './taskBindings.js';
+import { inFlightByTabId, roundBinding } from './taskBindings.js';
+import { registerGeminiRelayCallerTab, registerJimengRelayCallerTab } from './relayCallerTabTTL.js';
 
 /**
  * @param {string} clientRequestId
@@ -44,16 +40,10 @@ export async function masterDispatch(clientRequestId, command, payload, callerTa
   inFlightByTabId.set(tabId, roundId);
 
   if (command === 'GEMINI_IMAGE_FILL' && callerTabId != null && callerTabId > 0) {
-    geminiRelayCallerTabByRoundId.set(roundId, callerTabId);
-    setTimeout(() => {
-      geminiRelayCallerTabByRoundId.delete(roundId);
-    }, 12 * 60 * 1000);
+    registerGeminiRelayCallerTab(roundId, callerTabId);
   }
   if (command === 'JIMENG_IMAGE_FILL' && callerTabId != null && callerTabId > 0) {
-    jimengRelayCallerTabByRoundId.set(roundId, callerTabId);
-    setTimeout(() => {
-      jimengRelayCallerTabByRoundId.delete(roundId);
-    }, 12 * 60 * 1000);
+    registerJimengRelayCallerTab(roundId, callerTabId);
   }
 
   try {

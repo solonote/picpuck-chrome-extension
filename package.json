@@ -5,6 +5,7 @@
   "description": "PicPuck 受控 Chrome 扩展（core / agents 分层）",
   "type": "module",
   "scripts": {
+    "package": "node scripts/package-extension.mjs",
     "lint": "eslint .",
     "verify:phase0": "node scripts/verify-phase0.mjs",
     "verify:phase1": "node scripts/verify-phase1.mjs",
@@ -14,6 +15,7 @@
     "verify:all": "npm run lint && npm run verify:phase0 && npm run verify:phase1 && npm run verify:phase2 && npm run verify:phase3 && npm run verify:phase5-static"
   },
   "devDependencies": {
+    "archiver": "^7.0.1",
     "eslint": "^9.16.0",
     "globals": "^15.13.0"
   }

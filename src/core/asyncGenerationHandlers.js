@@ -8,7 +8,7 @@ import {
   setPendingPreSlot,
 } from './asyncGenerationState.js';
 import { PICPUCK_ASYNC_GEN_PAGE } from './runtimeMessages.js';
-import { dispatchAsyncGenerationLaunch } from './asyncLaunchDispatch.js';
+import { dispatchAsyncGenerationFillOnly, dispatchAsyncGenerationLaunch } from './asyncLaunchDispatch.js';
 
 const ASYNC_ID_RE = /^[a-z0-9]{12}$/;
 
@@ -69,6 +69,38 @@ export async function handlePicpuckAsyncGeneration(payload, sender) {
     await postEnvelopeToPage(tabId, {
       type: 'PICPUCK_ASYNC_GEN_PRE_ACK',
       client_handshake_id,
+    });
+    return { ok: true, asyncGenHandled: true };
+  }
+  if (phase === 'FILL_DISPATCH') {
+    if (!pendingPreSlot || typeof pendingPreSlot !== 'object') {
+      return { ok: false, error: '无 pending PRE' };
+    }
+    if (!pendingPreSlot.fillOnly) {
+      return { ok: false, error: '非仅填词模式' };
+    }
+    const err = validateHandshakeFields(payload, { forbidAsyncJobId: true });
+    if (err) return { ok: false, error: err };
+    const dispatchRest = { ...payload };
+    delete dispatchRest.picpuckAsyncPhase;
+    delete dispatchRest.type;
+    delete dispatchRest.action;
+    const merged = { ...pendingPreSlot, ...dispatchRest };
+    if (merged.async_job_id != null && String(merged.async_job_id).trim() !== '') {
+      return { ok: false, error: 'FILL_DISPATCH 禁止携带 async_job_id' };
+    }
+    const cid = String(merged.client_handshake_id || '').trim();
+    if (String(pendingPreSlot.client_handshake_id || '').trim() !== cid) {
+      return { ok: false, error: 'FILL_DISPATCH 与 pending PRE 不一致' };
+    }
+    setPendingPreSlot(null);
+    const client_handshake_id = cid;
+    await postEnvelopeToPage(tabId, {
+      type: 'PICPUCK_ASYNC_GEN_FILL_DISPATCH_RECEIVED',
+      client_handshake_id,
+    });
+    void dispatchAsyncGenerationFillOnly(tabId, merged).catch((e) => {
+      console.error('[PicPuck] dispatchAsyncGenerationFillOnly', e);
     });
     return { ok: true, asyncGenHandled: true };
   }

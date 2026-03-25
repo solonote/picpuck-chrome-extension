@@ -7,6 +7,8 @@ export const JIMENG_PROMPT_FIELD_NOT_FOUND = 'JIMENG_PROMPT_FIELD_NOT_FOUND';
 export const JIMENG_MODE_OR_PARAM_FAILED = 'JIMENG_MODE_OR_PARAM_FAILED';
 export const JIMENG_PROMPT_PLACEHOLDER_MISMATCH = 'JIMENG_PROMPT_PLACEHOLDER_MISMATCH';
 export const JIMENG_IMAGE_MAIN_INJECT_FAILED = 'JIMENG_IMAGE_MAIN_INJECT_FAILED';
+/** 载荷缺少或非法的 `jimengSubmitMode`（须为 toolbar | enter | none） */
+export const JIMENG_SUBMIT_MODE_INVALID = 'JIMENG_SUBMIT_MODE_INVALID';
 
 /** step19：120s 内未出现生成中 UI */
 export const JIMENG_GENERATE_START_TIMEOUT = 'JIMENG_GENERATE_START_TIMEOUT';
@@ -14,9 +16,16 @@ export const JIMENG_GENERATE_START_TIMEOUT = 'JIMENG_GENERATE_START_TIMEOUT';
 export const JIMENG_GENERATE_WAIT_TIMEOUT = 'JIMENG_GENERATE_WAIT_TIMEOUT';
 /** step20：无有效结果图 */
 export const JIMENG_GENERATE_NO_OUTPUT = 'JIMENG_GENERATE_NO_OUTPUT';
+/** step20：槽位已出现但 loading=lazy 未全部 decode（与 valid 张数不一致） */
+export const JIMENG_RESULT_LAZY_TIMEOUT = 'JIMENG_RESULT_LAZY_TIMEOUT';
 /** step21：右键菜单或「复制图片」不可用 */
 export const JIMENG_CONTEXT_MENU_FAILED = 'JIMENG_CONTEXT_MENU_FAILED';
 /** step21：单张 15s 内未从剪贴板读到新图 */
 export const JIMENG_CLIPBOARD_IMAGE_TIMEOUT = 'JIMENG_CLIPBOARD_IMAGE_TIMEOUT';
-/** step22：caller Tab 缺失或 sendMessage 失败 */
+export {
+  JIMENG_RELAY_CALLER_TAB_UNBOUND,
+  JIMENG_RELAY_INVALID_PAYLOAD,
+  JIMENG_RELAY_SEND_FAILED,
+} from '../../core/jimengRelayErrorCodes.js';
+/** step22：兼容旧日志；回传实现见 core/relayImagePayloadChunked.js */
 export const JIMENG_RELAY_CALLER_GONE = 'JIMENG_RELAY_CALLER_GONE';

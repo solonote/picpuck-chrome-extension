@@ -34,7 +34,7 @@
       "run_at": "document_idle"
     }
   ],
-  "permissions": ["tabs", "windows", "scripting", "clipboardWrite", "clipboardRead", "storage", "alarms"],
+  "permissions": ["tabs", "tabGroups", "windows", "scripting", "clipboardWrite", "clipboardRead", "storage", "alarms"],
   "host_permissions": [
     "https://jimeng.jianying.com/*",
     "https://gemini.google.com/*",

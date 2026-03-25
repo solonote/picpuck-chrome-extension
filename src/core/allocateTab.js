@@ -1,10 +1,14 @@
 /**
- * §9.4 allocateTab(command)：每次请求全量 `tabs.query`（§9.2）→ 按站点 `homeUrl` 前缀筛候选 Tab →
- * 按 tab.id 升序尝试 §9.3 原子抢占；无 idle 则 `tabs.create({ url: taskBaseUrl })` 并在 load complete 后复验 url 仍以 `homeUrl` 为前缀再抢占。
+ * §9.4 allocateTab(command)：每次请求全量 `tabs.query`（§9.2）→ 按站点 `homeUrl` 前缀筛候选 → **再**筛 PicPuck 蓝组内 Tab（见 `picpuckWorkspaceTabGroup`）→
+ * 按 tab.id 升序尝试 §9.3 原子抢占；无 idle 则 `tabs.create` 并入 PicPuck 组后再 `waitForTabUrlPrefix` 与抢占。
  */
 import { getCommandRecord } from './registry.js';
 import { injectableAcquireExecSlot } from './execSlot/injectableAcquireExecSlot.js';
 import { filterAndSortCandidates, MAX_SAME_BASE_TABS } from './tabCandidates.js';
+import {
+  ensureTabInPicpuckWorkspaceGroup,
+  filterPicpuckWorkspaceCandidates,
+} from './picpuckWorkspaceTabGroup.js';
 
 /** @typedef {{ ok: true, tabId: number }} AllocateTabOk */
 /** @typedef {{ ok: false, errorCode: string, message?: string }} AllocateTabFail */
@@ -24,9 +28,10 @@ export async function allocateTab(command) {
   }
 
   const all = await chrome.tabs.query({});
-  const candidates = filterAndSortCandidates(all, homeUrl);
+  const urlSorted = filterAndSortCandidates(all, homeUrl);
+  const candidates = await filterPicpuckWorkspaceCandidates(urlSorted);
 
-  // R12：同一前缀下第一个 idle 候选即复用；注入失败（跨域页等）则试下一个
+  // R12：同一前缀下第一个 idle 候选即复用；仅 PicPuck 蓝组内 Tab（不抢占用户裸开同域页）
   for (const tab of candidates) {
     if (tab.id == null) continue;
     const got = await tryAcquireOnTab(tab.id);
@@ -45,6 +50,13 @@ export async function allocateTab(command) {
   const created = await chrome.tabs.create({ url: taskBaseUrl, active: true });
   if (created.id == null) {
     return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'tabs.create no id' };
+  }
+
+  try {
+    await ensureTabInPicpuckWorkspaceGroup(created.id);
+  } catch (e) {
+    console.warn('[PicPuck] ensureTabInPicpuckWorkspaceGroup after create', e);
+    return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'tab group failed' };
   }
 
   try {

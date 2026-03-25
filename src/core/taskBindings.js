@@ -47,14 +47,5 @@ export function getRoundIdByWorkTabId(tabId) {
 }
 
 /**
- * Gemini 整图写剪贴板成功后，由 Gemini 页 CS 将字节回传到「发起命令」的 PicPuck 标签页。
- * key: roundId；value: 发起扩展命令的 tabId（localhost 熔炉页）。
+ * 熔炉 callerTabId 与 roundId 的 TTL 登记见 `relayCallerTabTTL.js`（register/get/touch/clear）。
  */
-/** @type {Map<string, number>} */
-export const geminiRelayCallerTabByRoundId = new Map();
-
-/**
- * 即梦多图经剪贴板收集后，由 SW 回传到发起 `jimengGenerateImage` 的熔炉标签页（与 Gemini 映射同生命周期约定）。
- * @type {Map<string, number>}
- */
-export const jimengRelayCallerTabByRoundId = new Map();

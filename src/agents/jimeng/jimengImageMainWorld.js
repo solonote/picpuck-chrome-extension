@@ -2,6 +2,9 @@
  * 即梦图片生成：MAIN 世界业务脚本（设计 §3.1.1）。
  * 由 SW `executeScript` `files` 注入；通过 `postMessage` 写日志（§3.2）。
  * 源语义对齐旧版 `runJimengGenerateImage`（不含 Banner / 三连击日志，R6 排除）。
+ *
+ * DOM：禁止写死 CSS Modules 哈希类名（如 label-l6Zq3t、button-text-xxxxx）。优先稳定文案、role、data-*；
+ * 若用 class 子串，仅用可预期的语义前缀（如 commercial-content、toolbar-button、lv-select-view-value）。
  */
 (function () {
   var g = typeof globalThis !== 'undefined' ? globalThis : window;
@@ -138,15 +141,92 @@
     return (val && val.textContent && val.textContent.trim()) || '';
   }
 
+  /**
+   * 画幅/分辨率按钮内的「比例 + 清晰度」合成标签：以 `commercial-content` 父级 span 或
+   * 「含 N:M + divider/超清/K」的 span 识别，不依赖 button-text 后缀哈希类名。
+   */
+  function jimengParamButtonLabelSpan(btn) {
+    if (!btn || !btn.querySelector) return null;
+    var comm = btn.querySelector('[class*="commercial-content"]');
+    if (comm) {
+      var par = comm.parentElement;
+      if (par && par.tagName === 'SPAN') return par;
+    }
+    var spans = btn.querySelectorAll('span');
+    var si;
+    var sp;
+    var t;
+    for (si = 0; si < spans.length; si++) {
+      sp = spans[si];
+      t = (sp.textContent && sp.textContent.trim()) || '';
+      if (!/\d+\s*:\s*\d+/.test(t)) continue;
+      if (sp.querySelector('[class*="commercial-content"]')) return sp;
+      if (sp.querySelector('[class*="divider"]')) return sp;
+      if (/[234]\s*[Kk]|超清/.test(t)) return sp;
+    }
+    return null;
+  }
+
+  function findJimengParamToolbarButton() {
+    var i;
+    var toolbar = findJimengGeneratorToolbar();
+    if (toolbar) {
+      var cands = toolbar.querySelectorAll('button[class*="toolbar-button"]');
+      for (i = 0; i < cands.length; i++) {
+        var b = cands[i];
+        if (!b.offsetParent) continue;
+        if (jimengParamButtonLabelSpan(b)) return b;
+      }
+    }
+    var all = doc.querySelectorAll('button[class*="toolbar-button"]');
+    for (i = 0; i < all.length; i++) {
+      var b2 = all[i];
+      if (!b2.offsetParent) continue;
+      if (jimengParamButtonLabelSpan(b2)) return b2;
+    }
+    var byText =
+      findByText(doc.body, '16:9', 'button') ||
+      findByText(doc.body, '9:16', 'button') ||
+      findByText(doc.body, '21:9', 'button') ||
+      findByText(doc.body, '3:4', 'button') ||
+      findByText(doc.body, '1:1', 'button');
+    if (byText) {
+      var btn = byText.tagName === 'BUTTON' ? byText : byText.closest && byText.closest('button');
+      if (btn && jimengParamButtonLabelSpan(btn)) return btn;
+    }
+    return null;
+  }
+
   function getCurrentParams() {
-    var btn = findByText(doc.body, '16:9', 'button') || findByText(doc.body, '9:16', 'button') || doc.querySelector('[class*="button-text-lDBpQJ"]');
+    var btn = findJimengParamToolbarButton();
     if (!btn) return { ratio: '', resolution: '' };
-    if (btn.classList && btn.classList.contains && !btn.classList.contains('lv-btn')) btn = btn.closest ? btn.closest('button') : btn.parentElement;
-    if (!btn) return { ratio: '', resolution: '' };
-    var t = (btn.textContent && btn.textContent.trim()) || '';
-    var resEl = btn.querySelector && btn.querySelector('[class*="commercial-content"]');
-    var res = (resEl && resEl.textContent && resEl.textContent.trim()) || '';
-    return { ratio: t, resolution: res };
+    var span = jimengParamButtonLabelSpan(btn);
+    var ratio = '';
+    var res = '';
+    if (span) {
+      var resEl = span.querySelector('[class*="commercial-content"]');
+      res = (resEl && resEl.textContent && resEl.textContent.trim()) || '';
+      var cn = span.childNodes;
+      var k;
+      for (k = 0; k < cn.length; k++) {
+        if (cn[k].nodeType === 3) {
+          var tr = String(cn[k].textContent || '').trim();
+          if (tr) {
+            ratio = tr;
+            break;
+          }
+        }
+      }
+      if (!ratio) {
+        var full = (span.textContent && span.textContent.trim()) || '';
+        if (res && full.indexOf(res) !== -1) ratio = full.split(res)[0].replace(/\s+/g, ' ').trim();
+        else ratio = full;
+      }
+    } else {
+      ratio = (btn.textContent && btn.textContent.trim()) || '';
+    }
+    if (res && ratio.indexOf(res) !== -1) ratio = ratio.replace(res, '').replace(/\s+/g, ' ').trim();
+    return { ratio: ratio, resolution: res };
   }
 
   function findFormAndOpen() {
@@ -213,7 +293,7 @@
   }
 
   function closePopover() {
-    var paramBtn = findByText(doc.body, '16:9', 'button') || doc.querySelector('button[class*="toolbar-button"]');
+    var paramBtn = findJimengParamToolbarButton();
     if (paramBtn && paramBtn.closest && paramBtn.closest('button')) paramBtn = paramBtn.closest('button');
     else if (paramBtn && paramBtn.tagName !== 'BUTTON' && paramBtn.parentElement && paramBtn.parentElement.tagName === 'BUTTON')
       paramBtn = paramBtn.parentElement;
@@ -271,6 +351,96 @@
     return out;
   }
 
+  /** 画幅/分辨率浮层：含「选择比例」的 lv-popover-content，避免扫到其它 popover。 */
+  function getVisibleRatioResolutionPopups() {
+    var all = doc.querySelectorAll('div[class*="lv-popover-content"]');
+    var out = [];
+    var i;
+    for (i = 0; i < all.length; i++) {
+      if (!all[i].offsetParent) continue;
+      var tx = all[i].textContent || '';
+      if (tx.indexOf('选择比例') !== -1) out.push(all[i]);
+    }
+    return out;
+  }
+
+  /** 弹层内常有「比例」「分辨率」两个 radiogroup，不用 field-/title- 哈希类；用选项形态区分。 */
+  function findRatioRadiogroupInPopup(popup) {
+    var groups = popup.querySelectorAll('[role="radiogroup"]');
+    if (groups.length <= 1) return groups.length ? groups[0] : null;
+    var g;
+    var rg;
+    var labs;
+    var L;
+    var t;
+    for (g = 0; g < groups.length; g++) {
+      rg = groups[g];
+      if (rg.querySelector('input[type="radio"][value*=":"]')) return rg;
+      if (rg.querySelector('input[type="radio"][value="智能"]')) return rg;
+      labs = rg.querySelectorAll('label');
+      for (L = 0; L < labs.length; L++) {
+        t = (labs[L].textContent && labs[L].textContent.trim()) || '';
+        if (/\d+\s*:\s*\d+/.test(t)) return rg;
+      }
+    }
+    return groups[0];
+  }
+
+  function clickParamPopoverRatio(wantRatio) {
+    var r = (wantRatio || '').trim();
+    if (!r) return false;
+    var popups = getVisibleRatioResolutionPopups();
+    var pi;
+    for (pi = 0; pi < popups.length; pi++) {
+      var scope = findRatioRadiogroupInPopup(popups[pi]) || popups[pi];
+      var inp = null;
+      if (r === '智能') {
+        var radios = scope.querySelectorAll('input[type="radio"]');
+        var ri;
+        for (ri = 0; ri < radios.length; ri++) {
+          var v = radios[ri].getAttribute('value');
+          if (v === null || v === '') {
+            inp = radios[ri];
+            break;
+          }
+        }
+      } else {
+        inp = scope.querySelector('input[type="radio"][value="' + r + '"]');
+      }
+      if (inp && inp.closest && inp.closest('label')) {
+        inp.closest('label').click();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function resolutionRadioValueFromLabel(wantRes) {
+    var s = (wantRes || '').trim();
+    if (!s) return '';
+    if (s.indexOf('4K') !== -1 || s.toLowerCase().indexOf('4k') !== -1) return '4k';
+    if (s.indexOf('2K') !== -1 || s.toLowerCase().indexOf('2k') !== -1) return '2k';
+    return '';
+  }
+
+  function clickParamPopoverResolution(wantRes) {
+    var val = resolutionRadioValueFromLabel(wantRes);
+    if (!val) return false;
+    var popups = getVisibleRatioResolutionPopups();
+    var pi;
+    for (pi = 0; pi < popups.length; pi++) {
+      var p = popups[pi];
+      var inp =
+        p.querySelector('[class*="resolution-radio"] input[type="radio"][value="' + val + '"]') ||
+        p.querySelector('input[type="radio"][value="' + val + '"]');
+      if (inp && inp.closest && inp.closest('label')) {
+        inp.closest('label').click();
+        return true;
+      }
+    }
+    return false;
+  }
+
   function getClickableOption(el) {
     if (!el || !el.closest) return el;
     var label = el.closest('label[class*="lv-radio"], label.lv-radio');
@@ -278,7 +448,8 @@
   }
 
   function findOptionInPopup(text) {
-    var popups = getVisiblePopups();
+    var ratioPopups = getVisibleRatioResolutionPopups();
+    var popups = ratioPopups.length ? ratioPopups : getVisiblePopups();
     for (var p = 0; p < popups.length; p++) {
       var popup = popups[p];
       var labels = popup.querySelectorAll('label.lv-radio, label[class*="lv-radio"]');
@@ -303,7 +474,7 @@
         if (t.indexOf(text) !== -1) return node;
       }
       var fallback = popup.querySelectorAll(
-        '[class*="select-option"], [class*="option-label"], [class*="label-l6Zq3t"], [class*="resolution-commercial-option"], div, span',
+        '[class*="select-option"], [class*="option-label"], [class*="resolution-commercial-option"], [class*="label-"], div, span',
       );
       for (var m = 0; m < fallback.length; m++) {
         if (!fallback[m].offsetParent) continue;
@@ -441,9 +612,7 @@
     if (!needRatio && !needRes) {
       return { ok: true };
     }
-    var paramBtn = findByText(doc.body, '16:9', 'button') || doc.querySelector('[class*="button-text-lDBpQJ"]');
-    if (paramBtn && paramBtn.closest && paramBtn.closest('button')) paramBtn = paramBtn.closest('button');
-    else if (paramBtn && paramBtn.parentElement && paramBtn.parentElement.tagName === 'BUTTON') paramBtn = paramBtn.parentElement;
+    var paramBtn = findJimengParamToolbarButton();
     var paramClicked = clickWhenVisible(function () {
       return paramBtn;
     });
@@ -452,12 +621,12 @@
     }
     await delay(DELAY_OPEN);
     if (needRatio) {
-      var ratioClicked = clickOptionWhenVisible(wantRatio);
+      var ratioClicked = clickParamPopoverRatio(wantRatio) || clickOptionWhenVisible(wantRatio);
       appendMainLog(roundId, stepKey, 'debug', 'Step11.debug.ratioClicked=' + ratioClicked);
       await delay(DELAY_AFTER_OPTION);
     }
     if (needRes) {
-      var resClicked = clickOptionWhenVisible(wantRes);
+      var resClicked = clickParamPopoverResolution(wantRes) || clickOptionWhenVisible(wantRes);
       appendMainLog(roundId, stepKey, 'debug', 'Step11.debug.resClicked=' + resClicked);
       await delay(DELAY_AFTER_OPTION);
     }
@@ -489,43 +658,142 @@
     }
   }
 
-  function insertPlainOnTarget(target, plain) {
-    var isTa = target.tagName === 'TEXTAREA';
+  /**
+   * 即梦 ProseMirror：整段 insertText 含 \\n 可能被当成提交或块分裂异常；换行用 insertLineBreak / Shift+Enter。
+   */
+  async function insertJimengContenteditableSoftLineBreaks(target, plain) {
     var s = typeof plain === 'string' ? plain : '';
-    if (isTa) {
-      target.value = s;
-      return;
-    }
     if (!s) return;
     target.focus();
-    var inserted = false;
-    try {
-      inserted = doc.execCommand('insertText', false, s);
-    } catch (ei) {
-      /* ignore */
-    }
-    if (!inserted) {
-      try {
-        var dtT = new DataTransfer();
-        dtT.setData('text/plain', s);
-        target.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dtT }));
-      } catch (ep) {
-        /* ignore */
+    var lines = s.split(/\r\n|\n|\r/);
+    var li;
+    for (li = 0; li < lines.length; li++) {
+      if (li > 0) {
+        var broke = false;
+        try {
+          broke = doc.execCommand('insertLineBreak', false, null);
+        } catch (eLb) {
+          broke = false;
+        }
+        if (!broke) {
+          try {
+            target.dispatchEvent(
+              new KeyboardEvent('keydown', {
+                key: 'Enter',
+                code: 'Enter',
+                keyCode: 13,
+                which: 13,
+                shiftKey: true,
+                bubbles: true,
+                cancelable: true,
+              }),
+            );
+            target.dispatchEvent(
+              new KeyboardEvent('keyup', {
+                key: 'Enter',
+                code: 'Enter',
+                keyCode: 13,
+                which: 13,
+                shiftKey: true,
+                bubbles: true,
+                cancelable: true,
+              }),
+            );
+          } catch (eSk) {
+            /* ignore */
+          }
+        }
+        await delay(45);
       }
+      var seg = lines[li];
+      if (!seg) continue;
+      var inserted = false;
+      try {
+        inserted = doc.execCommand('insertText', false, seg);
+      } catch (ei) {
+        inserted = false;
+      }
+      if (!inserted) {
+        try {
+          var dtT = new DataTransfer();
+          dtT.setData('text/plain', seg);
+          target.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dtT }));
+        } catch (ep) {
+          /* ignore */
+        }
+      }
+      await delay(25);
     }
   }
 
-  function pickNextJimengRefRemoveButton() {
-    var candidates = doc.querySelectorAll('[class*="remove-button"]');
+  /**
+   * 参考项内是否已有实际上传的预览图。
+   * 空槽示例：`reference-item` 内仅有 `reference-upload` + 加号 SVG + file input，无 `<img>`，`--reference-count: 1` 亦可。
+   * 有图：`img[data-apm-action="content-generator-reference-image"]`，或带 blob/https 且足够大的预览 img。
+   */
+  function jimengReferenceItemHasPreviewImage(item) {
+    if (!item || !item.querySelectorAll) return false;
+    if (!item.querySelector('img')) return false;
+    if (item.querySelector && item.querySelector('img[data-apm-action="content-generator-reference-image"]')) return true;
+    var imgs = item.querySelectorAll('img');
     var i;
-    var c;
-    var r;
-    for (i = 0; i < candidates.length; i++) {
-      c = candidates[i];
-      r = c.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) return c;
+    for (i = 0; i < imgs.length; i++) {
+      var im = imgs[i];
+      var rect = im.getBoundingClientRect();
+      if (rect.width < 20 || rect.height < 20) continue;
+      var src = (im.getAttribute('src') || '').trim();
+      if (!src) continue;
+      if (src.indexOf('record-loading') !== -1) continue;
+      if (src.indexOf('blob:') === 0 || src.indexOf('http://') === 0 || src.indexOf('https://') === 0) return true;
     }
-    return candidates.length ? candidates[0] : null;
+    return false;
+  }
+
+  function jimengReferencesRoot() {
+    var pec = doc.querySelector('[class*="prompt-editor-container"]');
+    return (pec && pec.querySelector('[class*="references-"]')) || doc.querySelector('[class*="references-"]');
+  }
+
+  /**
+   * 按 reference-item 遍历：仅对有预览图的项点移除。
+   * `remove-button-container-*` 的 class 也含子串 remove-button，若先点到外层容器常无法触发移除，会触发 sameTarget 提前结束。
+   * 排除含 `remove-button-container` 的节点，优先带关闭图标的可点层（内层 div.remove-button-*）。
+   */
+  function pickNextJimengRefRemoveButton() {
+    var refRoot = jimengReferencesRoot();
+    var items = (refRoot || doc).querySelectorAll('[class*="reference-item"]');
+    var ii;
+    var jj;
+    var item;
+    var nodes;
+    var c;
+    var cls;
+    var r;
+    var best;
+    var bestR;
+    for (ii = 0; ii < items.length; ii++) {
+      item = items[ii];
+      if (!jimengReferenceItemHasPreviewImage(item)) continue;
+      nodes = item.querySelectorAll('[class*="remove-button"]');
+      best = null;
+      bestR = -1;
+      for (jj = 0; jj < nodes.length; jj++) {
+        c = nodes[jj];
+        cls = (c.className && String(c.className)) || '';
+        if (cls.indexOf('remove-button-container') !== -1) continue;
+        r = c.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) continue;
+        if (c.querySelector && c.querySelector('svg')) {
+          return c;
+        }
+        if (r.width * r.height > bestR) {
+          bestR = r.width * r.height;
+          best = c;
+        }
+      }
+      if (best) return best;
+    }
+    return null;
   }
 
   function selectTextInElement(rootEl, substring) {
@@ -584,18 +852,30 @@
     clearEditorHardOnTarget(target);
     appendMainLog(roundId, stepKey, 'info', 'Step12.移除参考图');
     var removeCount = 0;
-    var removeRefMaxClicks = 80;
+    var removeRefMaxClicks = 24;
+    var lastRemoveEl = null;
+    var sameTargetStreak = 0;
     while (true) {
       var btn = pickNextJimengRefRemoveButton();
       if (!btn) break;
       if (removeCount >= removeRefMaxClicks) break;
+      if (btn === lastRemoveEl) {
+        sameTargetStreak++;
+        if (sameTargetStreak >= 2) {
+          appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.removeStopSameTarget');
+          break;
+        }
+      } else {
+        sameTargetStreak = 0;
+      }
+      lastRemoveEl = btn;
       removeCount++;
       try {
         btn.click();
       } catch (eRm) {
         appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.removeErr ' + (eRm && eRm.message));
       }
-      await delay(320);
+      await delay(480);
     }
     return { ok: true };
   }
@@ -610,7 +890,12 @@
   async function runStep13PasteReferenceClearPrompt(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step13_jimeng_paste_reference_clear_prompt';
-    var images = payload && Array.isArray(payload.images) ? payload.images : [];
+    var raw = payload && Array.isArray(payload.images) ? payload.images : [];
+    var images = [];
+    var ri;
+    for (ri = 0; ri < raw.length; ri++) {
+      if (typeof raw[ri] === 'string' && raw[ri].trim().length > 0) images.push(raw[ri]);
+    }
     if (images.length === 0) {
       return { ok: true, skipped: true };
     }
@@ -723,7 +1008,7 @@
     } else if (!prompt) {
       clearEditorHardOnTarget(target);
     } else {
-      insertPlainOnTarget(target, prompt);
+      await insertJimengContenteditableSoftLineBreaks(target, prompt);
     }
     target.dispatchEvent(new Event('input', { bubbles: true }));
     return { ok: true };
@@ -801,13 +1086,17 @@
     return { ok: true };
   }
 
-  /** @param {{ roundId: string, fillOnly?: boolean }} payload */
+  /** @param {{ roundId: string, jimengSubmitMode?: string }} payload */
   async function runStep17ClickGenerateIfNeeded(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step17_jimeng_click_generate_if_needed';
-    var fillOnly = !!(payload && payload.fillOnly);
-    if (fillOnly) {
-      appendMainLog(roundId, stepKey, 'info', 'Step17.跳过生成按钮+fillOnly');
+    var mode = payload && payload.jimengSubmitMode;
+    if (mode !== 'toolbar' && mode !== 'enter' && mode !== 'none') {
+      appendMainLog(roundId, stepKey, 'info', 'Step17.动作失败+jimengSubmitMode 非法或缺失');
+      return { ok: false, code: 'JIMENG_SUBMIT_MODE_INVALID' };
+    }
+    if (mode !== 'toolbar') {
+      appendMainLog(roundId, stepKey, 'info', 'Step17.跳过工具栏生成按钮+submitMode=' + mode);
       return { ok: true };
     }
     var genBtn = doc.querySelector('[class*="toolbar-actions"]');
@@ -819,18 +1108,69 @@
     return { ok: true };
   }
 
+  /**
+   * 即梦虚拟列表：`data-index="0"` 为当前最新一条（在列表底部一侧）。
+   * 在 `record-list-container` 内取 `item-*[data-index="0"]`；若 DOM 中有多块，取 `getBoundingClientRect().bottom` 最大者（最靠视口下方）。
+   * 新版：`record-box-wrapper-*` / `image-record-content-*` 包裹多图结果；外层仍常见 `item-*` + `data-index="0"` + `data-id`。
+   */
   function findLatestJimengGenerationRecordRoot(docRef) {
     var d = docRef || doc;
-    var mainEl = d.querySelector('main');
-    var scope = mainEl || d.body || d;
-    var nodes = scope.querySelectorAll('div[class^="item-"][data-id][data-index]');
+    var shell = d.querySelector('#dreamina-ui-configuration-content-wrapper') || d.querySelector('main');
+    var scope = shell || d.body || d;
+
+    function bestRecordByClassFragment(frag) {
+      var nodes = scope.querySelectorAll('[class*="' + frag + '"]');
+      var best = null;
+      var bestBottom = -1e9;
+      var i;
+      var el;
+      var r;
+      var nImg;
+      for (i = 0; i < nodes.length; i++) {
+        el = nodes[i];
+        nImg = el.querySelectorAll('img[data-apm-action="ai-generated-image-record-card"]').length;
+        if (nImg < 1) continue;
+        r = el.getBoundingClientRect();
+        if (r.width < 4 || r.height < 4) continue;
+        if (r.bottom > bestBottom) {
+          bestBottom = r.bottom;
+          best = el;
+        }
+      }
+      return best;
+    }
+
+    var listRoot = scope.querySelector('[class*="record-list-container"]') || scope;
+    var candidates = listRoot.querySelectorAll('[data-index="0"][data-id]');
     var i;
     var el;
+    var best = null;
+    var bestBottom = -1e9;
+    for (i = 0; i < candidates.length; i++) {
+      el = candidates[i];
+      if (!el.getAttribute || el.getAttribute('data-index') !== '0') continue;
+      var cname = (el.className && String(el.className)) || '';
+      if (cname.indexOf('item-') === -1) continue;
+      var r = el.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4) continue;
+      if (r.bottom > bestBottom) {
+        bestBottom = r.bottom;
+        best = el;
+      }
+    }
+    if (best) return best;
+    var nodes = scope.querySelectorAll('div[class*="item-"][data-id][data-index]');
     for (i = 0; i < nodes.length; i++) {
       el = nodes[i];
       if (el.getAttribute('data-index') === '0') return el;
     }
-    var alt = scope.querySelector('[class*="ai-generated-record-content"]');
+    var newUiBox = bestRecordByClassFragment('record-box-wrapper');
+    if (newUiBox) return newUiBox;
+    var newUiContent = bestRecordByClassFragment('image-record-content');
+    if (newUiContent) return newUiContent;
+    var alt =
+      scope.querySelector('[class*="ai-generated-record-content"]') ||
+      scope.querySelector('[class*="image-record-content"]');
     return alt || null;
   }
 
@@ -850,31 +1190,268 @@
     return img.complete && img.naturalWidth > 0;
   }
 
-  function listJimengResultImagesOrdered(root) {
-    if (!root) return [];
-    var all = root.querySelectorAll('img');
+  /** 与 listJimengResultImagesOrdered 相同的结果区根（多图网格在 record-box-wrapper 内）。 */
+  function jimengResultImagesScopeElement(root) {
+    if (!root) return null;
+    var box = root.querySelector && root.querySelector('[class*="record-box-wrapper"]');
+    return box || root;
+  }
+
+  /**
+   * 结果卡槽位（含 https src，不要求已 decode）。多图时用于与「有效图」张数对齐，避免 loading=lazy 只加载首张导致 Step20 过早 n=1。
+   */
+  function listJimengResultCardSlotElements(root) {
+    var scope = jimengResultImagesScopeElement(root);
+    if (!scope || !scope.querySelectorAll) return [];
+    var nodes = scope.querySelectorAll('img[data-apm-action="ai-generated-image-record-card"]');
     var out = [];
     var i;
+    var src;
+    for (i = 0; i < nodes.length; i++) {
+      src = (nodes[i].getAttribute('src') || '').trim();
+      if (src.indexOf('http://') !== 0 && src.indexOf('https://') !== 0) continue;
+      if (src.indexOf('record-loading-animation') !== -1) continue;
+      out.push(nodes[i]);
+    }
+    return out;
+  }
+
+  function listJimengResultImagesOrdered(root) {
+    if (!root) return [];
+    var scope = jimengResultImagesScopeElement(root);
+    if (!scope) return [];
+    var prefer = scope.querySelectorAll('img[data-apm-action="ai-generated-image-record-card"]');
+    var out = [];
+    var i;
+    for (i = 0; i < prefer.length; i++) {
+      if (isValidJimengResultImg(prefer[i])) out.push(prefer[i]);
+    }
+    if (out.length > 0) return out;
+    var all = scope.querySelectorAll('img');
     for (i = 0; i < all.length; i++) {
       if (isValidJimengResultImg(all[i])) out.push(all[i]);
     }
     return out;
   }
 
-  function resolveContextMenuTargetForImg(img) {
+  /** 促使 lazy 图进入视口；与 listJimengResultCardSlotElements 搭配使用。 */
+  function nudgeJimengLazyResultCardsIntoView(root, slotImgs) {
+    if (!root) return;
+    try {
+      root.scrollIntoView({ block: 'center', behavior: 'instant' });
+    } catch (eR) {
+      /* ignore */
+    }
+    var j;
+    var im;
+    for (j = 0; j < slotImgs.length; j++) {
+      im = slotImgs[j];
+      if (!im || im.tagName !== 'IMG') continue;
+      if (im.complete && im.naturalWidth > 0) continue;
+      try {
+        im.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+      } catch (eI) {
+        /* ignore */
+      }
+    }
+  }
+
+  /** 即梦结果卡：data-apm-action 在内部 img 上，不能对 role=button 用 closest(该选择器)。菜单入口常在 class 含 context-menu-trigger 的层上。 */
+  function resolveContextMenuDispatchTarget(img) {
+    if (!img || img.tagName !== 'IMG') return { target: img, degraded: true, via: 'img' };
+    var trigger = null;
     var cur = img;
+    while (cur) {
+      var c = (cur.className && String(cur.className)) || '';
+      if (c.indexOf('context-menu-trigger') !== -1) {
+        trigger = cur;
+        break;
+      }
+      cur = cur.parentElement;
+    }
+    cur = img;
+    var cardButton = null;
     while (cur) {
       if (
         cur.getAttribute &&
         cur.getAttribute('role') === 'button' &&
-        String(cur.getAttribute('tabindex')) === '0'
+        String(cur.getAttribute('tabindex')) === '0' &&
+        cur.querySelector &&
+        cur.querySelector('[data-apm-action="ai-generated-image-record-card"]')
       ) {
-        var anc = cur.closest && cur.closest('[data-apm-action="ai-generated-image-record-card"]');
-        if (anc) return { target: cur, degraded: false };
+        cardButton = cur;
+        break;
       }
       cur = cur.parentElement;
     }
-    return { target: img, degraded: true };
+    var dispatchTarget = trigger || cardButton || img;
+    var degraded = !trigger && !cardButton;
+    var via = trigger ? 'context-menu-trigger' : cardButton ? 'role-button-card' : 'img';
+    return { target: dispatchTarget, degraded: degraded, via: via };
+  }
+
+  /** 首张结果图外层的可点击卡片（role=button）；部分新版 DOM 需先左键点一次，合成右键「复制图片」链才响应。 */
+  function findJimengResultImageCardRoleButton(imgEl) {
+    if (!imgEl) return null;
+    var cur = imgEl;
+    var depth = 0;
+    while (cur && depth < 22) {
+      if (
+        cur.getAttribute &&
+        cur.getAttribute('role') === 'button' &&
+        String(cur.getAttribute('tabindex')) === '0' &&
+        cur.querySelector &&
+        cur.querySelector('[data-apm-action="ai-generated-image-record-card"]')
+      ) {
+        return cur;
+      }
+      cur = cur.parentElement;
+      depth++;
+    }
+    return null;
+  }
+
+  /**
+   * 即梦新版：首张 lazy 图或卡片未激活时，仅派发自定义 contextmenu 会卡住；人工右键一次后恢复。
+   * 在 Step21 首张复制前：滚入视口 + 对卡片做一次合成左键点击（必要时再点 context 层），模拟「先点选再右键」。
+   */
+  async function primeJimengFirstResultCardBeforeContextMenu(card, imgEl, roundId, stepKey) {
+    var clickTarget = findJimengResultImageCardRoleButton(imgEl) || card;
+    try {
+      if (imgEl && imgEl.scrollIntoView) {
+        imgEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      } else if (clickTarget.scrollIntoView) {
+        clickTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
+    } catch (eSc) {
+      /* ignore */
+    }
+    await delay(120);
+    try {
+      if (clickTarget.focus && typeof clickTarget.focus === 'function') {
+        clickTarget.focus({ preventScroll: true });
+      }
+    } catch (eF) {
+      /* ignore */
+    }
+    var r = clickTarget.getBoundingClientRect ? clickTarget.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+    var lx = r.left + Math.min(Math.max(r.width / 2, 24), 100);
+    var ly = r.top + Math.min(Math.max(r.height / 2, 24), 100);
+    var base = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: lx,
+      clientY: ly,
+      button: 0,
+      buttons: 1,
+    };
+    try {
+      if (typeof PointerEvent !== 'undefined') {
+        clickTarget.dispatchEvent(
+          new PointerEvent(
+            'pointerdown',
+            Object.assign({}, base, { pointerId: 1, pointerType: 'mouse', isPrimary: true, width: 1, height: 1, pressure: 0.5 }),
+          ),
+        );
+      }
+      clickTarget.dispatchEvent(new MouseEvent('mousedown', base));
+      clickTarget.dispatchEvent(new MouseEvent('mouseup', Object.assign({}, base, { buttons: 0 })));
+      clickTarget.dispatchEvent(new MouseEvent('click', Object.assign({}, base, { buttons: 0 })));
+      if (typeof PointerEvent !== 'undefined') {
+        clickTarget.dispatchEvent(
+          new PointerEvent(
+            'pointerup',
+            Object.assign({}, base, {
+              pointerId: 1,
+              pointerType: 'mouse',
+              isPrimary: true,
+              pressure: 0,
+              buttons: 0,
+            }),
+          ),
+        );
+      }
+    } catch (eClk) {
+      appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.firstCardPrimeClickErr ' + (eClk && eClk.message));
+    }
+    appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.firstCardPrimed');
+    await delay(400);
+  }
+
+  /** Step21：等结果图 decode + 尺寸稳定后再右键，避免复制到未加载完的低清/空图 */
+  async function ensureJimengResultImageReadyForCopy(imgEl, roundId, stepKey) {
+    var deadline = Date.now() + 35000;
+    var MIN_WH = 120;
+    var lastKey = '';
+    var stableSince = 0;
+    var STABLE_NEED_MS = 500;
+    while (Date.now() < deadline) {
+      if (!imgEl || imgEl.tagName !== 'IMG') return false;
+      try {
+        if (imgEl.decode && typeof imgEl.decode === 'function') {
+          await imgEl.decode();
+        }
+      } catch (eD) {
+        /* ignore */
+      }
+      var nw = imgEl.naturalWidth || 0;
+      var nh = imgEl.naturalHeight || 0;
+      var now = Date.now();
+      if (imgEl.complete && nw >= MIN_WH && nh >= MIN_WH) {
+        var key = nw + 'x' + nh;
+        if (key === lastKey) {
+          if (now - stableSince >= STABLE_NEED_MS) {
+            await delay(550);
+            return true;
+          }
+        } else {
+          lastKey = key;
+          stableSince = now;
+        }
+      } else {
+        lastKey = '';
+        stableSince = 0;
+      }
+      await delay(130);
+    }
+    appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.imgReadyTimeout');
+    return false;
+  }
+
+  function dispatchSyntheticContextMenu(el, cx, cy) {
+    var base = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: cx,
+      clientY: cy,
+      button: 2,
+      buttons: 2,
+    };
+    if (typeof PointerEvent !== 'undefined') {
+      try {
+        var pi = {
+          pointerId: 1,
+          pointerType: 'mouse',
+          isPrimary: true,
+          width: 1,
+          height: 1,
+          pressure: 0.5,
+        };
+        el.dispatchEvent(new PointerEvent('pointerdown', Object.assign({}, base, pi)));
+        el.dispatchEvent(new MouseEvent('mousedown', base));
+        el.dispatchEvent(new MouseEvent('contextmenu', base));
+        el.dispatchEvent(new PointerEvent('pointerup', Object.assign({}, base, pi, { pressure: 0 })));
+        el.dispatchEvent(new MouseEvent('mouseup', base));
+        return;
+      } catch (ePtr) {
+        /* fall through */
+      }
+    }
+    el.dispatchEvent(new MouseEvent('mousedown', base));
+    el.dispatchEvent(new MouseEvent('contextmenu', base));
+    el.dispatchEvent(new MouseEvent('mouseup', base));
   }
 
   function isElementVisible(el) {
@@ -889,11 +1466,17 @@
   function findMenuItemCopyImageExact(root) {
     var walk = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
     var n;
+    var v;
     while ((n = walk.nextNode())) {
-      var v = n.nodeValue != null ? String(n.nodeValue).trim() : '';
-      if (v === '复制图片') {
-        var el = n.parentElement;
-        return el || null;
+      v = n.nodeValue != null ? String(n.nodeValue).trim() : '';
+      if (v === '复制图片' || v === '复制图像') {
+        return n.parentElement || null;
+      }
+      if (/^复制\s*图片$/.test(v)) {
+        return n.parentElement || null;
+      }
+      if (v === 'Copy image' || v === 'Copy Image') {
+        return n.parentElement || null;
       }
     }
     return null;
@@ -904,15 +1487,170 @@
     var i;
     var d;
     var cls;
+    var itemEl;
+    var hit;
     for (i = 0; i < divs.length; i++) {
       d = divs[i];
       cls = (d.className && String(d.className)) || '';
       if (cls.indexOf('context-menu-') === -1) continue;
+      if (cls.indexOf('context-menu-trigger') !== -1) continue;
       if (!isElementVisible(d)) continue;
-      var itemEl = findMenuItemCopyImageExact(d);
+      itemEl = findMenuItemCopyImageExact(d);
       if (itemEl) return { menuRoot: d, itemEl: itemEl };
     }
+    var menus = doc.querySelectorAll('[role="menu"], [role="listbox"]');
+    for (i = 0; i < menus.length; i++) {
+      d = menus[i];
+      if (!isElementVisible(d)) continue;
+      itemEl = findMenuItemCopyImageExact(d);
+      if (itemEl) return { menuRoot: d, itemEl: itemEl };
+    }
+    var portalish = doc.querySelectorAll(
+      'div[class*="dropdown"], div[class*="Dropdown"], div[class*="popover"], div[class*="Popover"], div[class*="Popup"], div[class*="popup"]',
+    );
+    for (i = 0; i < portalish.length; i++) {
+      d = portalish[i];
+      cls = (d.className && String(d.className)) || '';
+      if (cls.indexOf('context-menu-trigger') !== -1) continue;
+      if (!isElementVisible(d)) continue;
+      itemEl = findMenuItemCopyImageExact(d);
+      if (itemEl) return { menuRoot: d, itemEl: itemEl };
+    }
+    var walk = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null);
+    var n;
+    var v;
+    var up;
+    var depth;
+    while ((n = walk.nextNode())) {
+      v = n.nodeValue != null ? String(n.nodeValue).trim() : '';
+      if (v !== '复制图片' && v !== '复制图像' && v !== 'Copy image' && v !== 'Copy Image' && !/^复制\s*图片$/.test(v)) {
+        continue;
+      }
+      itemEl = n.parentElement;
+      if (!itemEl) continue;
+      up = itemEl;
+      depth = 0;
+      while (up && depth < 18) {
+        if (isElementVisible(up)) {
+          cls = (up.className && String(up.className)) || '';
+          if (
+            (cls.indexOf('context-menu-') !== -1 && cls.indexOf('context-menu-trigger') === -1) ||
+            cls.indexOf('dropdown') !== -1 ||
+            cls.indexOf('Dropdown') !== -1 ||
+            cls.indexOf('popover') !== -1 ||
+            cls.indexOf('Popup') !== -1 ||
+            cls.indexOf('popup') !== -1 ||
+            up.getAttribute('role') === 'menu' ||
+            up.getAttribute('role') === 'listbox'
+          ) {
+            hit = findMenuItemCopyImageExact(up);
+            if (hit) return { menuRoot: up, itemEl: hit };
+          }
+        }
+        up = up.parentElement;
+        depth++;
+      }
+    }
     return null;
+  }
+
+  function jimengTextIndicatesCopyProgress(t) {
+    if (!t || typeof t !== 'string') return false;
+    return (
+      t.indexOf('复制中') !== -1 ||
+      t.indexOf('下载中') !== -1 ||
+      t.indexOf('图片复制') !== -1 ||
+      t.indexOf('正在复制') !== -1 ||
+      t.indexOf('复制处理') !== -1
+    );
+  }
+
+  /**
+   * 点「复制图片」后的进度 UI：实际多为「复制中」+ `spin-*` + `loading-icon`，
+   * 亦兼容旧版顶部 `lv-message-wrapper` 含「下载中」。
+   */
+  function findVisibleJimengCopyDownloadToast() {
+    var i;
+    var el;
+    var t;
+    var nodes = doc.querySelectorAll(
+      '[class*="lv-message-wrapper"], [class*="arco-message"], [class*="semi-toast"], [class*="message-wrapper"]',
+    );
+    for (i = 0; i < nodes.length; i++) {
+      el = nodes[i];
+      if (!isElementVisible(el)) continue;
+      t = el.textContent || '';
+      if (jimengTextIndicatesCopyProgress(t)) return el;
+    }
+    nodes = doc.querySelectorAll('[class*="spin-message"]');
+    for (i = 0; i < nodes.length; i++) {
+      el = nodes[i];
+      if (!isElementVisible(el)) continue;
+      t = el.textContent || '';
+      if (jimengTextIndicatesCopyProgress(t)) return el;
+    }
+    var svs = doc.querySelectorAll('svg[class*="loading-icon"]');
+    var cur;
+    var depth;
+    for (i = 0; i < svs.length; i++) {
+      cur = svs[i].parentElement;
+      depth = 0;
+      while (cur && depth < 14) {
+        if (isElementVisible(cur)) {
+          t = cur.textContent || '';
+          if (
+            jimengTextIndicatesCopyProgress(t) &&
+            cur.querySelector &&
+            cur.querySelector('[class*="spin-"]')
+          ) {
+            return cur;
+          }
+        }
+        cur = cur.parentElement;
+        depth++;
+      }
+    }
+    return null;
+  }
+
+  /** 复制完成：全局 Message 成功态（Step21 在剪贴板前必等此条） */
+  function jimengTextIndicatesCopySuccess(t) {
+    if (!t || typeof t !== 'string') return false;
+    return (
+      t.indexOf('复制成功') !== -1 ||
+      t.indexOf('已复制') !== -1 ||
+      t.indexOf('复制完成') !== -1 ||
+      t.indexOf('已拷贝') !== -1
+    );
+  }
+
+  function findVisibleJimengCopySuccessToast() {
+    var nodes = doc.querySelectorAll(
+      '[class*="lv-message-success"], [class*="message-success"], [class*="arco-message-success"], [class*="arco-message"]',
+    );
+    var i;
+    var el;
+    var t;
+    for (i = 0; i < nodes.length; i++) {
+      el = nodes[i];
+      if (!isElementVisible(el)) continue;
+      t = el.textContent || '';
+      if (jimengTextIndicatesCopySuccess(t)) return el;
+    }
+    return null;
+  }
+
+  function tryDismissJimengFloatingUi() {
+    try {
+      doc.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }),
+      );
+      doc.dispatchEvent(
+        new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }),
+      );
+    } catch (eEsc) {
+      /* ignore */
+    }
   }
 
   function waitJimengClipboardReadFromIsolatedWorld(roundId, previousImageBase64, timeoutMs) {
@@ -959,12 +1697,12 @@
     });
   }
 
-  /** @param {{ roundId: string }} payload */
+  /** @param {{ roundId: string, jimengSubmitMode?: string }} payload */
   async function runStep18SubmitPromptEnterIfConfigured(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step18_jimeng_submit_prompt_enter_if_configured';
-    if (!payload || !payload.submitAfterFill) {
-      appendMainLog(roundId, stepKey, 'info', 'Step18.本步跳过+未启用 submitAfterFill');
+    if (!payload || payload.jimengSubmitMode !== 'enter') {
+      appendMainLog(roundId, stepKey, 'info', 'Step18.本步跳过+非Enter提交模式');
       return { ok: true, skipped: true };
     }
     var target = findJimengPromptField();
@@ -1023,24 +1761,106 @@
     var stepKey = 'step20_jimeng_wait_generation_finished';
     var enterAtMs = payload && typeof payload.enterAtMs === 'number' ? payload.enterAtMs : Date.now();
     var deadlineTotal = enterAtMs + 600000;
+    var lastSlotCount = -1;
+    var tick = 0;
     while (Date.now() < deadlineTotal) {
       var root = findLatestJimengGenerationRecordRoot(doc);
-      if (root && !isJimengRecordGenerating(root)) {
-        var imgs = listJimengResultImagesOrdered(root);
-        if (imgs.length >= 1) {
-          appendMainLog(roundId, stepKey, 'info', 'Step20.生成完成+有效结果图张数=' + imgs.length);
-          return { ok: true, n: imgs.length };
-        }
+      if (!root) {
+        await delay(350);
+        continue;
       }
-      await delay(350);
+      if (isJimengRecordGenerating(root)) {
+        lastSlotCount = -1;
+        await delay(350);
+        continue;
+      }
+      var slots = listJimengResultCardSlotElements(root);
+      var slotCount = slots.length;
+      if (tick % 3 === 0) {
+        nudgeJimengLazyResultCardsIntoView(root, slots);
+      }
+      var valid = listJimengResultImagesOrdered(root);
+      if (slotCount >= 1) {
+        if (slotCount !== lastSlotCount) {
+          lastSlotCount = slotCount;
+          appendMainLog(roundId, stepKey, 'debug', 'Step20.debug.resultSlots=' + slotCount + ' valid=' + valid.length);
+        }
+        if (valid.length === slotCount) {
+          appendMainLog(roundId, stepKey, 'info', 'Step20.生成完成+有效结果图张数=' + valid.length);
+          return { ok: true, n: valid.length };
+        }
+      } else if (valid.length >= 1) {
+        appendMainLog(roundId, stepKey, 'info', 'Step20.生成完成+有效结果图张数=' + valid.length);
+        return { ok: true, n: valid.length };
+      }
+      tick++;
+      await delay(400);
     }
     var root2 = findLatestJimengGenerationRecordRoot(doc);
-    if (root2 && !isJimengRecordGenerating(root2) && listJimengResultImagesOrdered(root2).length === 0) {
-      appendMainLog(roundId, stepKey, 'info', 'Step20.动作失败+生成结束但无有效结果图');
-      return { ok: false, code: 'JIMENG_GENERATE_NO_OUTPUT' };
+    if (root2 && !isJimengRecordGenerating(root2)) {
+      var slots2 = listJimengResultCardSlotElements(root2);
+      var v2 = listJimengResultImagesOrdered(root2);
+      if (slots2.length >= 1 && v2.length < slots2.length) {
+        appendMainLog(
+          roundId,
+          stepKey,
+          'info',
+          'Step20.动作失败+结果图未全部加载 slots=' + slots2.length + ' valid=' + v2.length,
+        );
+        appendMainLog(roundId, stepKey, 'debug', 'Step20.debug.JIMENG_RESULT_LAZY_TIMEOUT');
+        return { ok: false, code: 'JIMENG_RESULT_LAZY_TIMEOUT' };
+      }
+      if (v2.length === 0) {
+        appendMainLog(roundId, stepKey, 'info', 'Step20.动作失败+生成结束但无有效结果图');
+        return { ok: false, code: 'JIMENG_GENERATE_NO_OUTPUT' };
+      }
     }
     appendMainLog(roundId, stepKey, 'info', 'Step20.动作失败+等待生成完成超时');
     return { ok: false, code: 'JIMENG_GENERATE_WAIT_TIMEOUT' };
+  }
+
+  /** 无 step20 时由 SW 调用：与 Step20 一致，等槽位与已 decode 张数对齐后再报 n。 */
+  async function runJimengCountNewestRecordImages(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step21_jimeng_infer_n_from_dom';
+    var inferDeadline = Date.now() + 30000;
+    var lastLogSlots = -1;
+    while (Date.now() < inferDeadline) {
+      var root = findLatestJimengGenerationRecordRoot(doc);
+      if (!root) break;
+      var slots = listJimengResultCardSlotElements(root);
+      var sc = slots.length;
+      nudgeJimengLazyResultCardsIntoView(root, slots);
+      var valid = listJimengResultImagesOrdered(root);
+      if (sc >= 1) {
+        if (sc !== lastLogSlots) {
+          lastLogSlots = sc;
+          appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.inferNFromDom slots=' + sc + ' valid=' + valid.length);
+        }
+        if (valid.length === sc) {
+          appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.inferNFromDom n=' + valid.length);
+          return { ok: true, n: valid.length };
+        }
+      } else if (valid.length >= 1) {
+        appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.inferNFromDom n=' + valid.length);
+        return { ok: true, n: valid.length };
+      }
+      await delay(400);
+    }
+    var root2 = findLatestJimengGenerationRecordRoot(doc);
+    var slots2 = listJimengResultCardSlotElements(root2);
+    var imgs = listJimengResultImagesOrdered(root2);
+    var n = imgs.length;
+    appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.inferNFromDom fallback n=' + n + ' slots=' + slots2.length);
+    if (n < 1) {
+      appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+未找到最新记录上的结果图');
+      return { ok: false, code: 'JIMENG_GENERATE_NO_OUTPUT' };
+    }
+    if (slots2.length >= 1 && n < slots2.length) {
+      appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图未全部加载 slots=' + slots2.length + ' valid=' + n);
+      return { ok: false, code: 'JIMENG_RESULT_LAZY_TIMEOUT' };
+    }
+    return { ok: true, n: n };
   }
 
   /** @param {{ roundId: string, n: number }} payload */
@@ -1053,70 +1873,170 @@
       return { ok: false, code: 'JIMENG_GENERATE_NO_OUTPUT' };
     }
     appendMainLog(roundId, stepKey, 'info', 'Step21.进入步骤');
-    var root = findLatestJimengGenerationRecordRoot(doc);
-    var imgs = listJimengResultImagesOrdered(root);
-    if (imgs.length < n) {
-      appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图数量不足');
+    var alignDeadline = Date.now() + 20000;
+    var imgs0 = [];
+    var root0 = null;
+    while (Date.now() < alignDeadline) {
+      root0 = findLatestJimengGenerationRecordRoot(doc);
+      if (root0) {
+        nudgeJimengLazyResultCardsIntoView(root0, listJimengResultCardSlotElements(root0));
+      }
+      imgs0 = listJimengResultImagesOrdered(root0);
+      if (imgs0.length >= n) break;
+      await delay(400);
+    }
+    if (imgs0.length < n) {
+      appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图数量不足 need=' + n + ' have=' + imgs0.length);
       return { ok: false, code: 'JIMENG_GENERATE_NO_OUTPUT' };
     }
     var collected = [];
     var prevB64 = '';
     var ii;
     for (ii = 0; ii < n; ii++) {
-      var imgEl = imgs[ii];
-      var pick = resolveContextMenuTargetForImg(imgEl);
-      if (pick.degraded) {
-        appendMainLog(
-          roundId,
-          stepKey,
-          'debug',
-          'Step21.debug.右键目标已降级为 img 自身 idx=' + ii,
-        );
+      var rootFresh = findLatestJimengGenerationRecordRoot(doc);
+      var imgsFresh = listJimengResultImagesOrdered(rootFresh);
+      if (imgsFresh.length <= ii) {
+        appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图数量不足');
+        return { ok: false, code: 'JIMENG_GENERATE_NO_OUTPUT' };
       }
+      var imgEl = imgsFresh[ii];
+      var readyOk = await ensureJimengResultImageReadyForCopy(imgEl, roundId, stepKey);
+      if (!readyOk) {
+        appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图未加载完成');
+        return { ok: false, code: 'JIMENG_GENERATE_NO_OUTPUT' };
+      }
+      appendMainLog(
+        roundId,
+        stepKey,
+        'debug',
+        'Step21.debug.imgReady idx=' + ii + ' ' + imgEl.naturalWidth + 'x' + imgEl.naturalHeight,
+      );
+      var pick = resolveContextMenuDispatchTarget(imgEl);
+      appendMainLog(
+        roundId,
+        stepKey,
+        'debug',
+        'Step21.debug.contextmenuTarget idx=' + ii + ' via=' + pick.via + ' degraded=' + pick.degraded,
+      );
       var card = pick.target;
-      var r = card.getBoundingClientRect();
-      var cx = r.left + Math.min(r.width / 2, 120);
-      var cy = r.top + Math.min(r.height / 2, 120);
-      try {
-        card.dispatchEvent(
-          new MouseEvent('contextmenu', {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            button: 2,
-            buttons: 2,
-            clientX: cx,
-            clientY: cy,
-          }),
-        );
-      } catch (eCm) {
-        appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.contextmenuErr ' + (eCm && eCm.message));
-        return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+      if (ii === 0) {
+        await primeJimengFirstResultCardBeforeContextMenu(card, imgEl, roundId, stepKey);
       }
-      await delay(120);
-      var menuFound = null;
-      var tMenu = Date.now() + 8000;
-      while (Date.now() < tMenu) {
-        menuFound = findVisibleJimengContextMenuWithCopy();
-        if (menuFound) break;
-        await delay(80);
-      }
-      if (!menuFound) {
-        appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+未找到复制图片菜单');
-        return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
-      }
-      try {
-        var clickEl = menuFound.itemEl;
-        if (clickEl.click) clickEl.click();
-        else menuFound.menuRoot.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-      } catch (eCk) {
-        return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
-      }
-      await delay(80);
-      var clipRes = await waitJimengClipboardReadFromIsolatedWorld(roundId, prevB64, 15000);
-      if (!clipRes || !clipRes.ok || typeof clipRes.imageBase64 !== 'string' || !clipRes.imageBase64) {
-        appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+剪贴板读取图片超时或失败');
-        return { ok: false, code: clipRes && clipRes.code ? clipRes.code : 'JIMENG_CLIPBOARD_IMAGE_TIMEOUT' };
+      var rCard = card.getBoundingClientRect();
+      var cx = rCard.left + Math.min(rCard.width / 2, 120);
+      var cy = rCard.top + Math.min(rCard.height / 2, 120);
+      var COPY_RETRY_MAX = 3;
+      var COPY_PROGRESS_WAIT_MS = 2000;
+      var COPY_SUCCESS_WAIT_MS = 45000;
+      var clipReadMs = 20000;
+      var copyAttempt = 0;
+      var clipRes = null;
+      copyRetry: while (copyAttempt < COPY_RETRY_MAX) {
+        copyAttempt++;
+        tryDismissJimengFloatingUi();
+        await delay(220);
+        try {
+          dispatchSyntheticContextMenu(card, cx, cy);
+        } catch (eCm) {
+          appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.contextmenuErr ' + (eCm && eCm.message));
+          return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+        }
+        await delay(500);
+        var menuFound = null;
+        var tMenu = Date.now() + 8000;
+        while (Date.now() < tMenu) {
+          menuFound = findVisibleJimengContextMenuWithCopy();
+          if (menuFound) break;
+          await delay(80);
+        }
+        if (!menuFound) {
+          appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.noCopyMenu attempt=' + copyAttempt);
+          if (copyAttempt >= COPY_RETRY_MAX) {
+            appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+未找到复制图片菜单');
+            return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+          }
+          await delay(400);
+          continue copyRetry;
+        }
+        await delay(500);
+        var menuNow = findVisibleJimengContextMenuWithCopy();
+        if (!menuNow) {
+          appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.menuVanishedAfterSettle a=' + copyAttempt);
+          if (copyAttempt >= COPY_RETRY_MAX) {
+            return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+          }
+          await delay(400);
+          continue copyRetry;
+        }
+        try {
+          var clickEl = menuNow.itemEl;
+          if (clickEl && clickEl.click) clickEl.click();
+          else menuNow.menuRoot.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        } catch (eCk) {
+          if (copyAttempt >= COPY_RETRY_MAX) return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+          await delay(400);
+          continue copyRetry;
+        }
+        await delay(120);
+        var sawProgress = false;
+        var tProg = Date.now() + COPY_PROGRESS_WAIT_MS;
+        while (Date.now() < tProg) {
+          if (findVisibleJimengCopyDownloadToast()) {
+            sawProgress = true;
+            break;
+          }
+          await delay(45);
+        }
+        if (!sawProgress) {
+          appendMainLog(
+            roundId,
+            stepKey,
+            'debug',
+            'Step21.debug.copyNoProgressToast2s a=' + copyAttempt,
+          );
+          if (copyAttempt >= COPY_RETRY_MAX) {
+            appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制后未出现复制中或下载中进度提示');
+            return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+          }
+          await delay(400);
+          continue copyRetry;
+        }
+        appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.sawCopyProgressToast a=' + copyAttempt);
+        var sawSuccessToast = false;
+        var tOk = Date.now() + COPY_SUCCESS_WAIT_MS;
+        while (Date.now() < tOk) {
+          if (findVisibleJimengCopySuccessToast()) {
+            sawSuccessToast = true;
+            break;
+          }
+          await delay(90);
+        }
+        if (!sawSuccessToast) {
+          appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.copySuccessToastTimeout a=' + copyAttempt);
+          if (copyAttempt >= COPY_RETRY_MAX) {
+            appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制后未出现复制成功提示');
+            return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+          }
+          await delay(400);
+          continue copyRetry;
+        }
+        appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.sawCopySuccessToast a=' + copyAttempt);
+        await delay(250);
+        clipRes = await waitJimengClipboardReadFromIsolatedWorld(roundId, prevB64, clipReadMs);
+        if (!clipRes || !clipRes.ok || typeof clipRes.imageBase64 !== 'string' || !clipRes.imageBase64) {
+          appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.clipboardEmptyOrTimeout firstPass a=' + copyAttempt);
+          await delay(400);
+          clipRes = await waitJimengClipboardReadFromIsolatedWorld(roundId, prevB64, clipReadMs);
+        }
+        if (clipRes && clipRes.ok && typeof clipRes.imageBase64 === 'string' && clipRes.imageBase64) {
+          break copyRetry;
+        }
+        appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.clipboardRetryAfterToast a=' + copyAttempt);
+        if (copyAttempt >= COPY_RETRY_MAX) {
+          appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+剪贴板读取图片超时或失败');
+          return { ok: false, code: clipRes && clipRes.code ? clipRes.code : 'JIMENG_CLIPBOARD_IMAGE_TIMEOUT' };
+        }
+        await delay(500);
       }
       prevB64 = clipRes.imageBase64;
       collected.push({
@@ -1144,6 +2064,7 @@
     runStep18SubmitPromptEnterIfConfigured: runStep18SubmitPromptEnterIfConfigured,
     runStep19WaitGenerationStarted: runStep19WaitGenerationStarted,
     runStep20WaitGenerationFinished: runStep20WaitGenerationFinished,
+    runJimengCountNewestRecordImages: runJimengCountNewestRecordImages,
     runStep21CollectImagesViaContextMenu: runStep21CollectImagesViaContextMenu,
   };
 })();

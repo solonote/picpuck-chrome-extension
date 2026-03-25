@@ -1,6 +1,6 @@
 /**
  * 熔炉扩展异步生成 HTTP 辅助：与 mcup-ai `POST /api/generation/event/generation-async/*` 及 Token 头对齐（**12** / **14**）。
- * `picpuckMcupExtensionAccessToken` / `picpuckMcupApiBase` 由 {@link ./extensionAccessTokenLifecycle.js} 签发与刷新；熔炉页 `PICPUCK_MCUP_ASYNC` 仅过渡兼容（将删）。
+ * `picpuckMcupExtensionAccessToken` / `picpuckMcupApiBase` 由 {@link ./extensionAccessTokenLifecycle.js} 签发与刷新。
  */
 
 const TOKEN_HEADER = 'X-Extension-Access-Token';
@@ -70,5 +70,33 @@ export async function mcupPostGenerationAsyncComplete(formData) {
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(json?.detail || json?.message || `MCUP_COMPLETE_${res.status}`);
+  }
+}
+
+/**
+ * PATCH extension-state（**13** / **14** 找回）。
+ * @param {{ projectId: string, async_job_id: string, extension_run_phase?: string, extension_remote_context?: string }} body
+ */
+export async function mcupPatchExtensionState(body) {
+  const session = await chrome.storage.session.get([
+    'picpuckMcupExtensionAccessToken',
+    'picpuckMcupApiBase',
+  ]);
+  const token = typeof session.picpuckMcupExtensionAccessToken === 'string'
+    ? session.picpuckMcupExtensionAccessToken.trim()
+    : '';
+  const apiBase = normalizeApiBase(session.picpuckMcupApiBase);
+  if (!token || !apiBase) {
+    throw new Error('MCUP_ASYNC_NO_TOKEN');
+  }
+  const res = await fetch(`${apiBase}/api/generation/event/generation-async/extension-state`, {
+    method: 'PATCH',
+    headers: { [TOKEN_HEADER]: token, 'Content-Type': 'application/json' },
+    credentials: 'omit',
+    body: JSON.stringify(body || {}),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json?.detail || json?.message || `MCUP_PATCH_STATE_${res.status}`);
   }
 }
