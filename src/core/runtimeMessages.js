@@ -5,3 +5,5 @@
 export const PICPUCK_COMMAND = 'PICPUCK_COMMAND';
 export const LOG_APPEND = 'LOG_APPEND';
 export const ROUND_PHASE = 'ROUND_PHASE';
+/** SW → 熔炉 content：转 `window.postMessage`（设计 **12** B） */
+export const PICPUCK_ASYNC_GEN_PAGE = 'PICPUCK_ASYNC_GEN_PAGE';

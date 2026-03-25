@@ -4,4 +4,6 @@
  */
 import './src/agents/jimeng/register.js';
 import './src/agents/gemini/register.js';
+import './src/agents/jimeng/registerAsyncLaunch.js';
+import './src/agents/gemini/registerAsyncLaunch.js';
 import './src/core/swMain.js';

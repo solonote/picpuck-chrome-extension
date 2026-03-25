@@ -15,7 +15,11 @@
   const PAGE_CMD = 'IdlinkExtensionCommand';
   /** 与 swMessages 中 `tabs.sendMessage` 的 type 一致：SW → 熔炉页 CS → window.postMessage */
   const PICPUCK_GEMINI_GENERATED_IMAGE = 'PICPUCK_GEMINI_GENERATED_IMAGE';
-  const PICPUCK_JIMENG_GENERATED_IMAGES = 'PICPUCK_JIMENG_GENERATED_IMAGES';
+  const PICPUCK_IMAGE_RELAY = 'PICPUCK_IMAGE_RELAY';
+  /** 与 `core/extensionAccessTokenLifecycle.js` 发向 CS 的 type 一致（设计 **12** §C） */
+  const PICPUCK_EXTENSION_ACCESS_TOKEN_REQUEST = 'PICPUCK_EXTENSION_ACCESS_TOKEN_REQUEST';
+  /** 与 `core/runtimeMessages.js` 中 `PICPUCK_ASYNC_GEN_PAGE` 一致（设计 **12** B） */
+  const PICPUCK_ASYNC_GEN_PAGE = 'PICPUCK_ASYNC_GEN_PAGE';
 
   const TOPBAR_ID = 'picpuck-agent-topbar';
   const COPY_FLASH_MS = 300;
@@ -115,30 +119,77 @@
    * @param {string} contentType
    */
   /**
-   * 将整图 base64 经 SW 转发回发起 Gemini 命令的 PicPuck 标签页，供熔炉上传并记 GENERATION 事件。
+   * @param {Record<string, unknown>} payload
+   * @returns {Promise<unknown>}
    */
-  function relayGeminiFullImageToCallerTab(buf, contentType, roundId, generationEvent) {
-    if (!extensionRuntimeOk() || !roundId || !generationEvent) return;
-    try {
-      if (!(buf instanceof ArrayBuffer)) return;
-      var u8 = new Uint8Array(buf);
-      var CH = 0x8000;
-      var bin = '';
-      for (var i = 0; i < u8.length; i += CH) {
-        bin += String.fromCharCode.apply(null, u8.subarray(i, Math.min(i + CH, u8.length)));
+  function sendPicpuckCommandAndWait(payload) {
+    return new Promise((resolve, reject) => {
+      if (!extensionRuntimeOk()) {
+        reject(new Error('Extension context invalidated'));
+        return;
       }
-      var imageBase64 = btoa(bin);
-      var ct = typeof contentType === 'string' && contentType ? contentType.split(';')[0].trim() : 'image/png';
-      safeRuntimeSendMessage({
-        type: PICPUCK_COMMAND,
-        payload: {
-          action: '__picpuckGeminiRelayGeneratedImage',
-          roundId: roundId,
-          imageBase64: imageBase64,
-          contentType: ct,
-          generationEvent: generationEvent,
-        },
+      try {
+        chrome.runtime.sendMessage({ type: PICPUCK_COMMAND, payload }, (res) => {
+          let lastErr = '';
+          try {
+            lastErr = chrome.runtime.lastError ? String(chrome.runtime.lastError.message || '') : '';
+          } catch {
+            lastErr = '';
+          }
+          if (lastErr) {
+            reject(new Error(lastErr));
+            return;
+          }
+          if (res && res.ok === false && typeof res.error === 'string') {
+            reject(new Error(res.error));
+            return;
+          }
+          resolve(res);
+        });
+      } catch (e) {
+        reject(e instanceof Error ? e : new Error(String(e)));
+      }
+    });
+  }
+
+  /**
+   * 将整图经 SW 以 picpuck.imageRelay 分片转发回熔炉页（避免单条 runtime.sendMessage 超 64MiB）。
+   */
+  async function relayGeminiFullImageToCallerTab(buf, contentType, roundId, generationEvent) {
+    if (!extensionRuntimeOk() || !roundId || !generationEvent) return;
+    if (!(buf instanceof ArrayBuffer)) return;
+    const ct = typeof contentType === 'string' && contentType ? contentType.split(';')[0].trim() : 'image/png';
+    const byteLen = buf.byteLength;
+    const base64CharLength = Math.ceil(byteLen / 3) * 4;
+    const u8 = new Uint8Array(buf);
+    /** 每段 base64 至多 262144 字符，与即梦 CHUNK 对齐 */
+    const CHUNK_BYTES = 196608;
+    try {
+      await sendPicpuckCommandAndWait({
+        action: '__picpuckGeminiRelayBegin',
+        roundId,
+        generationEvent,
+        contentType: ct,
+        base64CharLength,
       });
+      let seq = 0;
+      for (let off = 0; off < u8.length; off += CHUNK_BYTES) {
+        const end = Math.min(off + CHUNK_BYTES, u8.length);
+        const sub = u8.subarray(off, end);
+        let bin = '';
+        for (let i = 0; i < sub.length; i += 0x8000) {
+          bin += String.fromCharCode.apply(null, sub.subarray(i, Math.min(i + 0x8000, sub.length)));
+        }
+        const text = btoa(bin);
+        await sendPicpuckCommandAndWait({
+          action: '__picpuckGeminiRelayChunk',
+          roundId,
+          seq,
+          text,
+        });
+        seq += 1;
+      }
+      await sendPicpuckCommandAndWait({ action: '__picpuckGeminiRelayEnd', roundId });
     } catch (e) {
       console.warn('[PicPuck] relayGeminiFullImageToCallerTab failed', e);
     }
@@ -295,10 +346,13 @@
 
   function applyRoundPhase(payload) {
     if (!showPicpuckAgentTopbar()) return;
-    const { left, center, right } = ensureTopbarShell();
+    const { root, left, center, right } = ensureTopbarShell();
+    if (!root || !left || !center || !right) return;
     const phase = payload && payload.phase != null ? String(payload.phase) : 'idle';
     const roundShort = payload && payload.roundIdShort != null ? String(payload.roundIdShort) : '—';
     const lastInfo = payload && payload.lastInfoMessage != null ? String(payload.lastInfoMessage) : '';
+    /** 新建顶栏时 ensureTopbarShell 默认 exec-state=idle；须与 phase 一致，否则 SW 已 running 但属性仍 idle（Jimeng 重绘/同步顶栏后常见）。 */
+    root.setAttribute('data-picpuck-exec-state', BUSY_PHASES.has(phase) ? 'running' : 'idle');
     left.textContent = '当前轮次 ' + roundShort + ' · ' + phase;
     center.textContent = BUSY_PHASES.has(phase)
       ? 'PicPuck Agent 正在执行任务，请勿进行操作'
@@ -404,6 +458,47 @@
         /* Extension context invalidated 等 */
       }
     };
+    if (msg.type === PICPUCK_EXTENSION_ACCESS_TOKEN_REQUEST && msg.requestId) {
+      const requestId = msg.requestId;
+      (async () => {
+        try {
+          const apiBase = window.location.origin;
+          const res = await fetch(`${apiBase}/api/generation/event/extension-access-token`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          });
+          const json = await res.json().catch(() => ({}));
+          const tok = json?.data?.extension_access_token;
+          if (res.ok && typeof tok === 'string' && tok.trim()) {
+            safeRespond({ ok: true, requestId, token: tok.trim(), apiBase });
+          } else {
+            safeRespond({
+              ok: false,
+              requestId,
+              error: json?.detail || json?.message || `HTTP_${res.status}`,
+            });
+          }
+        } catch (e) {
+          safeRespond({
+            ok: false,
+            requestId,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      })();
+      return true;
+    }
+    if (msg.type === PICPUCK_ASYNC_GEN_PAGE && msg.envelope && typeof msg.envelope === 'object') {
+      try {
+        window.postMessage(msg.envelope, window.location.origin);
+        safeRespond({ ok: true });
+      } catch (e) {
+        safeRespond({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+      return;
+    }
     if (msg.type === PICPUCK_GEMINI_GENERATED_IMAGE) {
       try {
         window.postMessage(
@@ -421,19 +516,17 @@
       }
       return;
     }
-    if (msg.type === PICPUCK_JIMENG_GENERATED_IMAGES) {
+    if (msg.type === PICPUCK_IMAGE_RELAY) {
+      const env = msg.envelope;
+      if (!env || typeof env !== 'object') {
+        safeRespond({ ok: false, error: 'bad envelope' });
+        return;
+      }
       try {
-        window.postMessage(
-          {
-            type: 'IdlinkExtensionJimengGeneratedImages',
-            images: msg.images,
-            generationEvent: msg.generationEvent,
-          },
-          window.location.origin,
-        );
+        window.postMessage(env, window.location.origin);
         safeRespond({ ok: true });
       } catch (e) {
-        safeRespond({ ok: false });
+        safeRespond({ ok: false, error: e instanceof Error ? e.message : String(e) });
       }
       return;
     }
@@ -451,6 +544,21 @@
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     const d = event.data;
+    if (d && d.type === 'PICPUCK_MCUP_ASYNC' && d.kind === 'SET_ACCESS_TOKEN') {
+      const token = typeof d.token === 'string' ? d.token.trim() : '';
+      const apiBase = typeof d.apiBase === 'string' ? d.apiBase.trim() : '';
+      if (token) {
+        try {
+          chrome.storage.session.set({
+            picpuckMcupExtensionAccessToken: token,
+            picpuckMcupApiBase: apiBase,
+          });
+        } catch (_) {
+          /* ignore */
+        }
+      }
+      return;
+    }
     // MAIN 世界无 chrome.*，由页面 postMessage 经此桥到 SW
     if (d && d.picpuckBridge === true && d.kind === 'LOG_APPEND' && d.entry) {
       safeRuntimeSendMessage({ type: LOG_APPEND, entry: d.entry });
@@ -475,11 +583,11 @@
             /* ignore */
           }
         };
-        const deadline = Date.now() + 15000;
+        const deadline = Date.now() + 20000;
         while (Date.now() < deadline) {
           try {
             if (!navigator.clipboard || typeof navigator.clipboard.read !== 'function') {
-              await delayMsJimeng(150);
+              await delayMsJimeng(200);
               continue;
             }
             const items = await navigator.clipboard.read();
@@ -505,7 +613,7 @@
           } catch (_) {
             /* 继续轮询 */
           }
-          await delayMsJimeng(150);
+          await delayMsJimeng(200);
         }
         reply({ ok: false, code: 'JIMENG_CLIPBOARD_IMAGE_TIMEOUT' });
       })();
@@ -557,7 +665,7 @@
             window.location.origin,
           );
           if (ok && bufForRelay && relayGen && relayRoundId) {
-            relayGeminiFullImageToCallerTab(bufForRelay, ctForRelay, relayRoundId, relayGen);
+            await relayGeminiFullImageToCallerTab(bufForRelay, ctForRelay, relayRoundId, relayGen);
           }
         })();
       };
@@ -572,26 +680,74 @@
       removeGeminiClipboardBufferListener();
       return;
     }
+    if (d && d.type === PAGE_CMD && d.action === 'picpuckAsyncGeneration') {
+      safeRuntimeSendMessage({ type: PICPUCK_COMMAND, payload: d }, (res) => {
+        let lastErr = '';
+        try {
+          lastErr = chrome.runtime.lastError ? String(chrome.runtime.lastError.message || '') : '';
+        } catch {
+          return;
+        }
+        if (lastErr) return;
+        if (res && res.ok === false && res.error) {
+          try {
+            window.postMessage(
+              { type: 'PICPUCK_ASYNC_GEN_FAIL', error: String(res.error) },
+              window.location.origin,
+            );
+          } catch {
+            /* ignore */
+          }
+        }
+      });
+      return;
+    }
     if (!d || d.type !== PAGE_CMD) return;
-    safeRuntimeSendMessage({ type: PICPUCK_COMMAND, payload: d }, (res) => {
-      let lastErr = '';
+    const replyError = (errorMsg) => {
       try {
-        lastErr = chrome.runtime.lastError ? String(chrome.runtime.lastError.message || '') : '';
+        window.postMessage(
+          {
+            type: 'IdlinkExtensionCommandResult',
+            action: d.action,
+            ok: false,
+            error: errorMsg,
+          },
+          window.location.origin,
+        );
       } catch {
+        /* ignore */
+      }
+    };
+    try {
+      safeRuntimeSendMessage({ type: PICPUCK_COMMAND, payload: d }, (res) => {
+        let lastErr = '';
+        try {
+          lastErr = chrome.runtime.lastError ? String(chrome.runtime.lastError.message || '') : '';
+        } catch {
+          return;
+        }
+        if (lastErr) return;
+        const reply = {
+          type: 'IdlinkExtensionCommandResult',
+          action: d.action,
+          ok: !!(res && res.ok),
+          error: res && res.error,
+          roundId: res && res.roundId,
+          tabId: res && res.tabId,
+          phase: res && res.phase,
+        };
+        window.postMessage(reply, window.location.origin);
+      });
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      if (m.indexOf('maximum allowed size') !== -1 || m.indexOf('64MiB') !== -1) {
+        replyError(
+          '扩展单消息体积超过浏览器上限（参考图 data URL 过大）。请减少 @ 引用或依赖页面已做的自动压缩后重试。',
+        );
         return;
       }
-      if (lastErr) return;
-      const reply = {
-        type: 'IdlinkExtensionCommandResult',
-        action: d.action,
-        ok: !!(res && res.ok),
-        error: res && res.error,
-        roundId: res && res.roundId,
-        tabId: res && res.tabId,
-        phase: res && res.phase,
-      };
-      window.postMessage(reply, window.location.origin);
-    });
+      replyError(m || 'runtime.sendMessage 失败');
+    }
   });
 
   const idlePayload = { phase: 'idle', roundIdShort: '—', lastInfoMessage: '' };
@@ -600,8 +756,30 @@
     removeStalePicpuckTopbar();
     if (!showPicpuckAgentTopbar()) return;
     ensureTopbarShell();
-    applyRoundPhase(idlePayload);
-    wireLeftClick();
+    function finishTopbarPhase(payload) {
+      applyRoundPhase(payload);
+      wireLeftClick();
+    }
+    try {
+      chrome.runtime.sendMessage(
+        { type: PICPUCK_COMMAND, payload: { action: '__picpuckSyncTopbarFromSw' } },
+        (res) => {
+          let err = '';
+          try {
+            err = chrome.runtime.lastError ? String(chrome.runtime.lastError.message || '') : '';
+          } catch {
+            err = '';
+          }
+          if (!err && res && res.ok === true && res.phasePayload && typeof res.phasePayload === 'object') {
+            finishTopbarPhase(res.phasePayload);
+          } else {
+            finishTopbarPhase(idlePayload);
+          }
+        },
+      );
+    } catch {
+      finishTopbarPhase(idlePayload);
+    }
   }
 
   if (document.readyState === 'loading') {

@@ -4,8 +4,10 @@
 import { getCommandRecord } from './registry.js';
 import { getOrCreateRoundContext, appendLog, updatePhase, getContext } from './roundContext.js';
 import { releaseExecSlot } from './releaseExecSlot.js';
-import { inFlightByTabId, jimengRelayCallerTabByRoundId, roundBinding } from './taskBindings.js';
+import { clearJimengRelayCallerTabRegistration } from './relayCallerTabTTL.js';
+import { inFlightByTabId, roundBinding } from './taskBindings.js';
 import { detachLogSink } from './logSink.js';
+import { isAsyncJobCancelled } from './asyncGenerationState.js';
 import { persistRoundLogsSnapshot } from './roundLogSnapshot.js';
 import { pushRoundPhaseUi } from './phaseUi.js';
 import {
@@ -26,7 +28,7 @@ export async function dispatchRound(args) {
     await releaseExecSlot(tabId);
     inFlightByTabId.delete(tabId);
     roundBinding.delete(roundId);
-    jimengRelayCallerTabByRoundId.delete(roundId);
+    clearJimengRelayCallerTabRegistration(roundId);
     detachLogSink(tabId);
     return { phase: 'error' };
   }
@@ -62,13 +64,25 @@ export async function dispatchRound(args) {
     updatePhase(tabId, 'running');
     await pushRoundPhaseUi(tabId, roundId);
 
+    const assertAsyncJobNotCancelled = () => {
+      const aj =
+        ctx.payload && typeof ctx.payload.async_job_id === 'string'
+          ? ctx.payload.async_job_id.trim().toLowerCase()
+          : '';
+      if (aj && isAsyncJobCancelled(aj)) {
+        throw Object.assign(new Error('ASYNC_JOB_CANCELLED'), { code: 'ASYNC_JOB_CANCELLED' });
+      }
+    };
+
     for (let i = 0; i < rec.steps.length; i += 1) {
       const fn = rec.steps[i];
       if (typeof fn !== 'function') throw new Error(`step ${i} missing`);
+      assertAsyncJobNotCancelled();
       const r = await fn(ctx);
       if (r && r.ok === false) {
         throw Object.assign(new Error('STEP_OK_FALSE'), { stepResult: r });
       }
+      assertAsyncJobNotCancelled();
     }
 
     appendLog(tabId, {
@@ -82,12 +96,15 @@ export async function dispatchRound(args) {
     await pushRoundPhaseUi(tabId, roundId);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    const cancelled =
+      msg === 'ASYNC_JOB_CANCELLED' ||
+      (e && typeof e === 'object' && /** @type {{ code?: string }} */ (e).code === 'ASYNC_JOB_CANCELLED');
     appendLog(tabId, {
       ts: Date.now(),
       roundId,
       step: 'system',
       level: 'info',
-      message: 'Step99.本轮结束+失败',
+      message: cancelled ? 'Step99.本轮结束+已取消' : 'Step99.本轮结束+失败',
     });
     appendLog(tabId, {
       ts: Date.now(),
@@ -109,7 +126,7 @@ export async function dispatchRound(args) {
     await releaseExecSlot(tabId);
     inFlightByTabId.delete(tabId);
     roundBinding.delete(roundId);
-    jimengRelayCallerTabByRoundId.delete(roundId);
+    clearJimengRelayCallerTabRegistration(roundId);
     detachLogSink(tabId);
   }
 
