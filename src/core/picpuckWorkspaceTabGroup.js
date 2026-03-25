@@ -51,16 +51,101 @@ async function getValidatedGroupIdForWindow(windowId) {
   }
 }
 
+/**
+ * 扫描窗口内标题为 PicPuck、蓝色组；若存在多个则合并为一个，避免「第二次失败再建组」产生同名双组。
+ * @param {number} windowId
+ * @returns {Promise<number | null>} 合并后应使用的 groupId；无则 null
+ */
+async function resolvePicpuckGroupIdInWindow(windowId) {
+  let groups;
+  try {
+    groups = await chrome.tabGroups.query({ windowId });
+  } catch {
+    return null;
+  }
+  const picpuck = groups.filter((g) => g.title === 'PicPuck' && g.color === 'blue');
+  if (picpuck.length === 0) {
+    return null;
+  }
+  if (picpuck.length === 1) {
+    return picpuck[0].id;
+  }
+  const canonical = Math.min(...picpuck.map((g) => g.id));
+  for (const g of picpuck) {
+    if (g.id === canonical) continue;
+    let tabsIn;
+    try {
+      tabsIn = await chrome.tabs.query({ windowId, groupId: g.id });
+    } catch {
+      continue;
+    }
+    const ids = tabsIn.map((t) => t.id).filter((id) => id != null);
+    if (ids.length === 0) continue;
+    try {
+      await chrome.tabs.group({ groupId: canonical, tabIds: ids });
+    } catch (e) {
+      console.warn('[PicPuck] merge duplicate PicPuck tab groups failed', e);
+    }
+  }
+  return canonical;
+}
+
+/**
+ * session 中的 groupId 与 Chrome 实际分组可能不一致；优先以窗口内真实 PicPuck 组为准并写回 session。
+ * @param {number} windowId
+ * @returns {Promise<number | null>}
+ */
+async function getOrSyncPicpuckGroupId(windowId) {
+  const fromSession = await getValidatedGroupIdForWindow(windowId);
+  const fromChrome = await resolvePicpuckGroupIdInWindow(windowId);
+  if (fromChrome != null) {
+    if (fromSession == null || fromSession !== fromChrome) {
+      const map = await loadGroupMap();
+      map[String(windowId)] = fromChrome;
+      await saveGroupMap(map);
+    }
+    return fromChrome;
+  }
+  return fromSession;
+}
+
 async function doEnsureTabInGroup(tabId, windowId) {
-  let gid = await getValidatedGroupIdForWindow(windowId);
+  let gid = await getOrSyncPicpuckGroupId(windowId);
   if (gid != null) {
     try {
       await chrome.tabs.group({ groupId: gid, tabIds: [tabId] });
       return;
     } catch (e) {
       console.warn('[PicPuck] tabs.group into PicPuck group failed', e);
+      gid = await resolvePicpuckGroupIdInWindow(windowId);
+      if (gid != null) {
+        const map = await loadGroupMap();
+        map[String(windowId)] = gid;
+        await saveGroupMap(map);
+        try {
+          await chrome.tabs.group({ groupId: gid, tabIds: [tabId] });
+          return;
+        } catch (e2) {
+          console.warn('[PicPuck] tabs.group into PicPuck group retry failed', e2);
+        }
+      }
     }
   }
+
+  /** 并入失败或 session 为空时：再从窗口扫描 PicPuck 组，避免误建第二个同名组 */
+  gid = await resolvePicpuckGroupIdInWindow(windowId);
+  if (gid != null) {
+    const map = await loadGroupMap();
+    map[String(windowId)] = gid;
+    await saveGroupMap(map);
+    try {
+      await chrome.tabs.group({ groupId: gid, tabIds: [tabId] });
+      return;
+    } catch (e) {
+      console.warn('[PicPuck] tabs.group last-chance before create failed', e);
+    }
+  }
+
   const newGid = await chrome.tabs.group({ createProperties: { windowId }, tabIds: [tabId] });
   await chrome.tabGroups.update(newGid, { title: 'PicPuck', color: 'blue' });
   const map = await loadGroupMap();
