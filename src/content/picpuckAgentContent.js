@@ -2,7 +2,7 @@
 /**
  * 内容脚本（隔离世界）：在即梦/Gemini **且 Tab 位于 PicPuck 蓝组内**时注入顶栏 `#picpuck-agent-topbar`；本站（如 localhost）仅作 postMessage→SW 桥，不显示顶栏。
  *
- * - §4.1：左「当前轮次」（三连击）+ 中「等待/执行中」相对整条顶栏几何水平居中 + 右 Step 摘要（右对齐，`title` 全文）
+ * - §4.1：左黑框「当前轮次」+ 三连击复制日志；中：机器人 SVG + 主文案 + `STEP NN //` 与动作摘要；右：最后一条 info 摘要；执行中全视口霓虹边（pointer-events 不挡页面）
  * - §4.2：600ms 内三次点击左侧 → 向 SW 索取日志 JSON 并写入剪贴板（含 session 快照，避免 SW 休眠丢日志）
  * - 与 PicPuck 前端：`IdlinkExtensionCommand` / `IdlinkExtensionCommandResult`（同 picpuckExtension.js）
  * - MAIN 世界若需写日志：先 `postMessage` 到本脚本，再转发 `LOG_APPEND`（见 picpuckBridge）
@@ -23,7 +23,6 @@
 
   const TOPBAR_ID = 'picpuck-agent-topbar';
   const COPY_FLASH_MS = 300;
-  const COPY_FLASH_COLOR = '#1a3d1a';
   const TRIPLE_CLICK_MS = 600;
   /** Gemini Step13：整图已拦截后，在写系统剪贴板前争取把本 Tab 切回前台（用户可暂时离开） */
   const CLIPBOARD_TAB_FOCUS_MAX_MS = 5 * 60 * 1000;
@@ -260,8 +259,7 @@
     }
   }
 
-  /** 与顶栏根背景一致，左右区盖住中层文案边缘，避免与几何居中句叠读 */
-  const TOPBAR_SIDE_BG = 'rgba(20,20,24,.98)';
+  const STYLE_ID = 'picpuck-agent-topbar-styles';
 
   /** @type {Set<string>} */
   const BUSY_PHASES = new Set(['received', 'clearing', 'running']);
@@ -295,89 +293,189 @@
   }
 
   /**
-   * 中间提示相对整条顶栏几何水平居中（非「剩余 flex 区域」居中）。
-   * @param {HTMLElement} root
-   * @param {HTMLElement} left
-   * @param {HTMLElement} center
-   * @param {HTMLElement} right
+   * @param {string} lastInfo
+   * @returns {{ step: number | null, action: string }}
    */
-  function applyTopbarLayoutStyles(root, left, center, right) {
-    root.style.setProperty('justify-content', 'space-between');
-    root.style.setProperty('align-items', 'center');
-    left.style.cssText =
-      'flex:0 1 auto;max-width:42%;min-width:0;padding:4px 8px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;position:relative;z-index:2;background:' +
-      TOPBAR_SIDE_BG;
-    right.style.cssText =
-      'flex:0 1 auto;max-width:42%;min-width:0;padding:4px 8px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:right;position:relative;z-index:2;background:' +
-      TOPBAR_SIDE_BG;
-    center.style.cssText = [
-      'position:absolute',
-      'left:50%',
-      'top:50%',
-      'transform:translate(-50%,-50%)',
-      'z-index:1',
-      'max-width:min(92vw,calc(100vw - 200px))',
-      'padding:0 6px',
-      'box-sizing:border-box',
-      'pointer-events:none',
-      'text-align:center',
-      'white-space:nowrap',
-      'overflow:hidden',
-      'text-overflow:ellipsis',
-      'color:#b8bcc8',
-      'font-weight:500',
-    ].join(';');
+  function parseStepFromLastInfo(lastInfo) {
+    const s = typeof lastInfo === 'string' ? lastInfo.trim() : '';
+    if (!s) return { step: null, action: '' };
+    const m = s.match(/^Step(\d+)\.(.+)$/i);
+    if (m) return { step: parseInt(m[1], 10), action: m[2].trim() };
+    const m2 = s.match(/Step(\d+)/i);
+    return { step: m2 ? parseInt(m2[1], 10) : null, action: s };
   }
 
-  /** 若尚无根节点则创建；与 allocateTab 注入的裸根节点共存，仅补全左右子节点与样式 */
+  function injectTopbarStylesOnce() {
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = [
+      ':root{--pp-accent-cyan:#00f0ff;--pp-accent-cyan-glow:rgba(0,240,255,.5);--pp-accent-purple:#AF40FF;',
+      '--pp-bg-panel:rgba(10,12,16,.92);--pp-text-bright:#f8fafc;--pp-text-main:#cbd5e1;--pp-text-dim:#64748b;',
+      '--pp-font-sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--pp-font-mono:ui-monospace,SFMono-Regular,Consolas,monospace;}',
+      '#picpuck-agent-topbar{position:fixed;top:0;left:0;right:0;z-index:2147483646;box-sizing:border-box;',
+      'font:13px/1.45 var(--pp-font-sans);color:var(--pp-text-bright);pointer-events:none;}',
+      '#picpuck-agent-rim{position:fixed;inset:0;z-index:2147483645;pointer-events:none;opacity:0;transition:opacity .35s ease;',
+      'box-shadow:0 0 5px var(--pp-accent-cyan),inset 0 0 15px rgba(0,240,255,.8),inset 0 0 50px var(--pp-accent-cyan-glow),inset 0 0 150px rgba(0,240,255,.1);',
+      'border:1.5px solid rgba(0,240,255,.7);border-radius:2px;animation:pp-breathing-field 4s infinite alternate ease-in-out;}',
+      '@keyframes pp-breathing-field{0%{box-shadow:0 0 5px var(--pp-accent-cyan),inset 0 0 15px rgba(0,240,255,.8),inset 0 0 50px var(--pp-accent-cyan-glow),inset 0 0 150px rgba(0,240,255,.1);border-color:rgba(0,240,255,.7);}',
+      '100%{box-shadow:0 0 10px var(--pp-accent-cyan),inset 0 0 25px rgba(0,240,255,1),inset 0 0 80px rgba(0,240,255,.6),inset 0 0 200px rgba(0,240,255,.2);border-color:rgba(0,240,255,1);}}',
+      '#picpuck-agent-topbar[data-picpuck-exec-state="running"] #picpuck-agent-rim{opacity:1;}',
+      '#picpuck-agent-topbar[data-picpuck-exec-state="idle"] #picpuck-agent-rim{opacity:0;animation:none;box-shadow:none;border-color:transparent;}',
+      '#picpuck-agent-topbar .picpuck-topbar-inner{position:fixed;top:0;left:50%;transform:translateX(-50%);z-index:2;display:flex;flex-direction:row;',
+      'align-items:stretch;justify-content:center;min-height:52px;pointer-events:auto;width:auto;max-width:min(92vw,720px);',
+      'background:var(--pp-bg-panel);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);',
+      'border:1px solid rgba(0,240,255,.35);border-top:none;border-radius:0 0 12px 12px;box-sizing:border-box;padding:8px 16px 10px;}',
+      '#picpuck-agent-topbar[data-picpuck-exec-state="running"] .picpuck-topbar-inner{border-color:rgba(0,240,255,.8);',
+      'box-shadow:0 8px 28px rgba(0,0,0,.45),inset 0 0 4px var(--pp-accent-cyan-glow);}',
+      '.picpuck-banner-block{flex:1 1 auto;min-width:0;width:100%;}',
+      '.picpuck-banner-row{display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:12px;min-height:44px;}',
+      '.picpuck-banner-text-col{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:4px;flex:1;min-width:0;pointer-events:none;}',
+      '.picpuck-main-title{font-size:14px;font-weight:600;letter-spacing:.02em;color:var(--pp-text-bright);text-align:left;width:100%;',
+      'text-shadow:0 0 6px rgba(0,240,255,.25);}',
+      '#picpuck-agent-topbar[data-picpuck-exec-state="running"] .picpuck-main-title{text-shadow:0 0 8px var(--pp-accent-cyan);}',
+      '.picpuck-status-line{display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:8px;width:100%;',
+      'font-family:var(--pp-font-mono);font-size:12px;letter-spacing:.4px;color:var(--pp-text-dim);}',
+      '.picpuck-step-label::before{content:"";display:inline-block;width:14px;height:2px;background:var(--pp-text-dim);margin-right:2px;vertical-align:middle;}',
+      '.picpuck-step-action{color:var(--pp-accent-cyan);font-weight:600;text-shadow:0 0 10px rgba(0,240,255,.4);max-width:min(70vw,420px);',
+      'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none;}',
+      '.picpuck-bot-wrap{flex-shrink:0;width:44px;height:44px;display:flex;align-items:center;justify-content:center;',
+      'cursor:pointer;pointer-events:auto;border-radius:8px;}',
+      '.picpuck-bot-icon{width:40px;height:40px;display:block;filter:drop-shadow(0 0 6px rgba(0,240,255,.35));}',
+      '#picpuck-agent-topbar[data-picpuck-exec-state="idle"] .picpuck-bot-icon{filter:none;}',
+      '.picpuck-bot-body-group{animation:pp-hover-float 2.5s ease-in-out infinite alternate;transform-origin:center;}',
+      '.picpuck-bot-shadow{animation:pp-shadow-scale 2.5s ease-in-out infinite alternate;transform-origin:center;}',
+      '.picpuck-bot-eye{animation:pp-eye-scan 1.5s cubic-bezier(0.4,0,0.2,1) infinite alternate;}',
+      '.picpuck-bot-arm-left{animation:pp-typing-left .3s infinite alternate;transform-origin:30px 65px;}',
+      '.picpuck-bot-arm-right{animation:pp-typing-right .35s infinite alternate;transform-origin:90px 65px;}',
+      '.picpuck-bot-antenna-bulb{animation:pp-signal-pulse .8s ease-in-out infinite alternate;}',
+      '.picpuck-holo-keyboard{animation:pp-holo-flicker 2s infinite;}',
+      '.picpuck-data-particle{animation:pp-particle-rise 2s linear infinite;}',
+      '.picpuck-data-particle.pp-p2{animation-delay:.7s;animation-duration:2.5s;}',
+      '.picpuck-data-particle.pp-p3{animation-delay:1.2s;animation-duration:1.8s;}',
+      '@keyframes pp-hover-float{0%{transform:translateY(3px)}100%{transform:translateY(-3px)}}',
+      '@keyframes pp-shadow-scale{0%{transform:scale(1.05);opacity:.75}100%{transform:scale(.85);opacity:.35}}',
+      '@keyframes pp-eye-scan{0%{transform:translateX(0);width:8px}15%{transform:translateX(0);width:8px}50%{width:18px}',
+      '85%{transform:translateX(18px);width:8px}100%{transform:translateX(18px);width:8px}}',
+      '@keyframes pp-typing-left{0%{transform:rotate(0) translateY(0)}100%{transform:rotate(15deg) translateY(4px)}}',
+      '@keyframes pp-typing-right{0%{transform:rotate(0) translateY(0)}100%{transform:rotate(-12deg) translateY(5px)}}',
+      '@keyframes pp-signal-pulse{0%{fill:#AF40FF;filter:drop-shadow(0 0 2px #AF40FF)}100%{fill:#e5b3ff;filter:drop-shadow(0 0 8px #AF40FF)}}',
+      '@keyframes pp-holo-flicker{0%,100%{opacity:.5}50%{opacity:1;filter:drop-shadow(0 0 4px #00f0ff)}52%{opacity:.35}54%{opacity:.85}}',
+      '@keyframes pp-particle-rise{0%{transform:translateY(0) scale(0);opacity:0}20%{transform:translateY(-8px) scale(1);opacity:1}',
+      '80%{transform:translateY(-24px) scale(1);opacity:.75}100%{transform:translateY(-32px) scale(0);opacity:0}}',
+      '#picpuck-agent-topbar.picpuck-bot-idle .picpuck-bot-body-group,#picpuck-agent-topbar.picpuck-bot-idle .picpuck-bot-shadow,',
+      '#picpuck-agent-topbar.picpuck-bot-idle .picpuck-bot-eye,#picpuck-agent-topbar.picpuck-bot-idle .picpuck-bot-arm-left,',
+      '#picpuck-agent-topbar.picpuck-bot-idle .picpuck-bot-arm-right,#picpuck-agent-topbar.picpuck-bot-idle .picpuck-bot-antenna-bulb,',
+      '#picpuck-agent-topbar.picpuck-bot-idle .picpuck-holo-keyboard,#picpuck-agent-topbar.picpuck-bot-idle .picpuck-data-particle{animation:none!important;}',
+    ].join('');
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  /** 与 ui-design/Extension_SVG.HTML 一致，类名加 picpuck- 前缀避免与页面冲突 */
+  function botSvgMarkup() {
+    return (
+      '<svg class="picpuck-bot-icon" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+      '<g class="picpuck-holo-keyboard"><ellipse cx="60" cy="105" rx="35" ry="6" fill="none" stroke="#00f0ff" stroke-width="1" opacity="0.3"/>' +
+      '<line x1="40" y1="105" x2="80" y2="105" stroke="#00f0ff" stroke-width="2" stroke-linecap="round" opacity="0.8"/>' +
+      '<line x1="50" y1="100" x2="70" y2="100" stroke="#00f0ff" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/></g>' +
+      '<ellipse cx="60" cy="110" rx="20" ry="3" fill="#00f0ff" opacity="0.5" class="picpuck-bot-shadow"/>' +
+      '<circle cx="25" cy="80" r="2" fill="#00f0ff" class="picpuck-data-particle"/>' +
+      '<circle cx="95" cy="60" r="1.5" fill="#AF40FF" class="picpuck-data-particle pp-p2"/>' +
+      '<circle cx="30" cy="40" r="2.5" fill="#00f0ff" class="picpuck-data-particle pp-p3"/>' +
+      '<g class="picpuck-bot-body-group">' +
+      '<line x1="60" y1="35" x2="60" y2="15" stroke="#AF40FF" stroke-width="2.5" stroke-linecap="round"/>' +
+      '<circle cx="60" cy="15" r="4" fill="#AF40FF" class="picpuck-bot-antenna-bulb"/>' +
+      '<rect x="35" y="35" width="50" height="45" rx="14" fill="#0d1117" stroke="#00f0ff" stroke-width="2.5"/>' +
+      '<rect x="42" y="45" width="36" height="16" rx="6" fill="#030407"/>' +
+      '<rect x="46" y="50" width="8" height="6" rx="3" fill="#00f0ff" class="picpuck-bot-eye"/>' +
+      '<line x1="50" y1="70" x2="70" y2="70" stroke="#262c36" stroke-width="2" stroke-linecap="round"/>' +
+      '<line x1="55" y1="74" x2="65" y2="74" stroke="#262c36" stroke-width="2" stroke-linecap="round"/>' +
+      '<g class="picpuck-bot-arm-left"><rect x="23" y="55" width="8" height="22" rx="4" fill="#0d1117" stroke="#AF40FF" stroke-width="2"/>' +
+      '<circle cx="27" cy="73" r="2" fill="#AF40FF"/></g>' +
+      '<g class="picpuck-bot-arm-right"><rect x="89" y="55" width="8" height="22" rx="4" fill="#0d1117" stroke="#AF40FF" stroke-width="2"/>' +
+      '<circle cx="93" cy="73" r="2" fill="#AF40FF"/></g></g></svg>'
+    );
+  }
+
+  /** 若尚无根节点则创建；与 allocateTab 注入的裸根节点共存 */
   function ensureTopbarShell() {
     if (!isWorkspaceSiteHost()) {
-      return { root: null, left: null, center: null, right: null };
+      return { root: null, center: null, logTarget: null };
     }
+    injectTopbarStylesOnce();
     let root = document.getElementById(TOPBAR_ID);
     if (!root) {
       root = document.createElement('div');
       root.id = TOPBAR_ID;
       root.setAttribute('data-picpuck-exec-state', 'idle');
-      root.style.cssText = [
-        'position:fixed',
-        'top:0',
-        'left:0',
-        'right:0',
-        'z-index:2147483646',
-        'display:flex',
-        'flex-direction:row',
-        'align-items:center',
-        'justify-content:space-between',
-        'min-height:28px',
-        'font:12px/1.4 system-ui,sans-serif',
-        'background:rgba(20,20,24,.92)',
-        'color:#e8e8ec',
-        'border-bottom:1px solid #333',
-        'box-sizing:border-box',
-      ].join(';');
+      root.className = 'picpuck-bot-idle';
       (document.body || document.documentElement).appendChild(root);
     }
-    let left = root.querySelector('[data-picpuck-topbar-left]');
-    if (!left) {
-      left = document.createElement('div');
-      left.setAttribute('data-picpuck-topbar-left', '1');
-      root.appendChild(left);
+    if (!root.querySelector('.picpuck-topbar-inner')) {
+      root
+        .querySelectorAll(':scope > [data-picpuck-topbar-left], :scope > [data-picpuck-topbar-center], :scope > [data-picpuck-topbar-right]')
+        .forEach((el) => {
+          el.remove();
+        });
     }
-    let right = root.querySelector('[data-picpuck-topbar-right]');
-    if (!right) {
-      right = document.createElement('div');
-      right.setAttribute('data-picpuck-topbar-right', '1');
-      root.appendChild(right);
+    let rim = root.querySelector('#picpuck-agent-rim');
+    if (!rim) {
+      rim = document.createElement('div');
+      rim.id = 'picpuck-agent-rim';
+      rim.setAttribute('aria-hidden', 'true');
+      root.insertBefore(rim, root.firstChild);
     }
-    let center = root.querySelector('[data-picpuck-topbar-center]');
-    if (!center) {
+    let inner = root.querySelector('.picpuck-topbar-inner');
+    if (!inner) {
+      inner = document.createElement('div');
+      inner.className = 'picpuck-topbar-inner';
+      root.appendChild(inner);
+    }
+    inner.querySelectorAll('[data-picpuck-topbar-left],[data-picpuck-topbar-right]').forEach((el) => el.remove());
+    let center = inner.querySelector('[data-picpuck-topbar-center]');
+    const needsRebuild =
+      !center ||
+      !center.querySelector('.picpuck-banner-text-col') ||
+      !center.querySelector('[data-picpuck-main-title]');
+    if (needsRebuild) {
+      if (center) center.remove();
       center = document.createElement('div');
       center.setAttribute('data-picpuck-topbar-center', '1');
-      root.insertBefore(center, right);
+      center.className = 'picpuck-banner-block';
+      inner.appendChild(center);
     }
-    applyTopbarLayoutStyles(root, left, center, right);
-    return { root, left, center, right };
+    if (!center.querySelector('.picpuck-banner-row')) {
+      center.textContent = '';
+      const row = document.createElement('div');
+      row.className = 'picpuck-banner-row';
+      const botWrap = document.createElement('div');
+      botWrap.className = 'picpuck-bot-wrap';
+      botWrap.setAttribute('data-picpuck-log-target', '1');
+      botWrap.innerHTML = botSvgMarkup();
+      const textCol = document.createElement('div');
+      textCol.className = 'picpuck-banner-text-col';
+      const mainTitle = document.createElement('div');
+      mainTitle.className = 'picpuck-main-title';
+      mainTitle.setAttribute('data-picpuck-main-title', '1');
+      const statusLine = document.createElement('div');
+      statusLine.className = 'picpuck-status-line';
+      const stepLab = document.createElement('span');
+      stepLab.className = 'picpuck-step-label';
+      stepLab.setAttribute('data-picpuck-step-label', '1');
+      stepLab.textContent = 'STEP -- //';
+      const stepAct = document.createElement('span');
+      stepAct.className = 'picpuck-step-action';
+      stepAct.setAttribute('data-picpuck-step-action', '1');
+      statusLine.appendChild(stepLab);
+      statusLine.appendChild(stepAct);
+      textCol.appendChild(mainTitle);
+      textCol.appendChild(statusLine);
+      row.appendChild(botWrap);
+      row.appendChild(textCol);
+      center.appendChild(row);
+    }
+    const logTarget = center.querySelector('[data-picpuck-log-target]');
+    return { root, center, logTarget };
   }
 
   async function applyRoundPhase(payload) {
@@ -385,26 +483,40 @@
       removePicpuckTopbarDom();
       return;
     }
-    const { root, left, center, right } = ensureTopbarShell();
-    if (!root || !left || !center || !right) return;
+    const { root, center } = ensureTopbarShell();
+    if (!root || !center) return;
     const phase = payload && payload.phase != null ? String(payload.phase) : 'idle';
-    const roundShort = payload && payload.roundIdShort != null ? String(payload.roundIdShort) : '—';
     const lastInfo = payload && payload.lastInfoMessage != null ? String(payload.lastInfoMessage) : '';
+    const busy = BUSY_PHASES.has(phase);
     /** 新建顶栏时 ensureTopbarShell 默认 exec-state=idle；须与 phase 一致，否则 SW 已 running 但属性仍 idle（Jimeng 重绘/同步顶栏后常见）。 */
-    root.setAttribute('data-picpuck-exec-state', BUSY_PHASES.has(phase) ? 'running' : 'idle');
-    left.textContent = '当前轮次 ' + roundShort + ' · ' + phase;
-    center.textContent = BUSY_PHASES.has(phase)
-      ? 'PicPuck Agent 正在执行任务，请勿进行操作'
-      : 'PicPuck Agent 等待新的任务';
-    right.textContent = lastInfo;
-    right.setAttribute('title', lastInfo);
+    root.setAttribute('data-picpuck-exec-state', busy ? 'running' : 'idle');
+    if (busy) {
+      root.classList.remove('picpuck-bot-idle');
+    } else {
+      root.classList.add('picpuck-bot-idle');
+    }
+    const mainTitle = center.querySelector('[data-picpuck-main-title]');
+    const stepLabelEl = center.querySelector('[data-picpuck-step-label]');
+    const stepActEl = center.querySelector('[data-picpuck-step-action]');
+    if (mainTitle) {
+      mainTitle.textContent = busy
+        ? 'PicPuck Agent 正在进行操作，请勿执行操作或切换窗口'
+        : 'PicPuck Agent 正在等待任务';
+    }
+    const { step: stepNum, action: actionText } = parseStepFromLastInfo(lastInfo);
+    if (stepLabelEl) {
+      stepLabelEl.textContent = 'STEP ' + (stepNum != null ? String(stepNum).padStart(2, '0') : '--') + ' //';
+    }
+    if (stepActEl) {
+      stepActEl.textContent = actionText || (lastInfo ? lastInfo : '—');
+    }
   }
 
-  function flashCopySuccess(leftEl) {
-    const prev = leftEl.style.backgroundColor;
-    leftEl.style.backgroundColor = COPY_FLASH_COLOR;
+  function flashCopySuccess(el) {
+    const prev = el.style.boxShadow;
+    el.style.boxShadow = '0 0 0 2px rgba(0,240,255,.85)';
     setTimeout(() => {
-      leftEl.style.backgroundColor = prev;
+      el.style.boxShadow = prev;
     }, COPY_FLASH_MS);
   }
 
@@ -427,7 +539,7 @@
   }
 
   /** §4.2：导出前再按 ts 升序排序，与 SW 侧 RoundContext / 快照约定一致 */
-  function requestLogsAndCopy(leftEl) {
+  function requestLogsAndCopy(triggerEl) {
     safeRuntimeSendMessage({ type: PICPUCK_COMMAND, payload: { type: PAGE_CMD, action: '__picpuckCopyLogs' } }, (res) => {
       let lastErr = '';
       try {
@@ -441,7 +553,7 @@
       }
       const sorted = [...res.logs].sort((a, b) => (a.ts || 0) - (b.ts || 0));
       const text = JSON.stringify(sorted);
-      const done = () => flashCopySuccess(leftEl);
+      const done = () => flashCopySuccess(triggerEl);
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(text).then(done, () => copyTextFallback(text, done));
       } else {
@@ -450,23 +562,23 @@
     });
   }
 
-  function onLeftClick(e) {
-    const left = e.currentTarget;
+  function onRobotTripleClick(e) {
+    const logTarget = e.currentTarget;
     const now = Date.now();
     clickTimes.push(now);
     clickTimes = clickTimes.filter((t) => now - t <= TRIPLE_CLICK_MS);
     if (clickTimes.length >= 3) {
       clickTimes = [];
-      requestLogsAndCopy(left);
+      requestLogsAndCopy(logTarget);
     }
   }
 
-  async function wireLeftClick() {
+  async function wireRobotTripleClick() {
     if (!(await shouldShowWorkspaceTopbar())) return;
-    const { left } = ensureTopbarShell();
-    if (!left) return;
-    left.removeEventListener('click', onLeftClick);
-    left.addEventListener('click', onLeftClick);
+    const { logTarget } = ensureTopbarShell();
+    if (!logTarget) return;
+    logTarget.removeEventListener('click', onRobotTripleClick);
+    logTarget.addEventListener('click', onRobotTripleClick);
   }
 
   function delayMsJimeng(ms) {
@@ -573,7 +685,7 @@
       void (async () => {
         try {
           await applyRoundPhase(msg.payload);
-          await wireLeftClick();
+          await wireRobotTripleClick();
         } catch {
           /* ignore */
         }
@@ -793,7 +905,7 @@
     ensureTopbarShell();
     async function finishTopbarPhase(payload) {
       await applyRoundPhase(payload);
-      await wireLeftClick();
+      await wireRobotTripleClick();
     }
     try {
       chrome.runtime.sendMessage(
