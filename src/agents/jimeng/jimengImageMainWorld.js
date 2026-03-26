@@ -17,10 +17,6 @@
   var doc = document;
   var DELAY_OPEN = 1000;
   var DELAY_AFTER_OPTION = 600;
-  /** Step14：页内分阶段等待提示词区（后台 Tab 常无 layout，offsetParent 为假） */
-  var STEP14_PROMPT_FIELD_MAX_WAIT_MS = 30000;
-  var STEP14_PROMPT_FIELD_POLL_MS = 500;
-  var STEP14_PROMPT_FIELD_LOG_EVERY_MS = 5000;
 
   function appendMainLog(roundId, step, level, message) {
     try {
@@ -88,100 +84,6 @@
     }
     var ta = doc.querySelector('textarea[class*="lv-textarea"], textarea[placeholder*="描述"], [class*="prompt-container"] textarea');
     if (ta && ta.offsetParent) return ta;
-    return null;
-  }
-
-  /** 后台/hidden 时布局未算，offsetParent 常为 null；仅用于 Step14 填词 */
-  function findJimengPromptFieldRelaxed() {
-    var list = doc.querySelectorAll('[class*="prompt-editor-container"] .tiptap.ProseMirror[contenteditable="true"]');
-    var i;
-    var el;
-    for (i = 0; i < list.length; i++) {
-      el = list[i];
-      if (!el || !el.isConnected) continue;
-      if (el.closest && el.closest('[class*="prompt-editor-sizer"]')) continue;
-      return el;
-    }
-    var pm = doc.querySelectorAll('.tiptap.ProseMirror[contenteditable="true"][role="textbox"]');
-    for (i = 0; i < pm.length; i++) {
-      el = pm[i];
-      if (!el || !el.isConnected) continue;
-      if (el.closest && el.closest('[class*="prompt-editor-sizer"]')) continue;
-      return el;
-    }
-    var ta = doc.querySelector('textarea[class*="lv-textarea"], textarea[placeholder*="描述"], [class*="prompt-container"] textarea');
-    if (ta && ta.isConnected) return ta;
-    return null;
-  }
-
-  function resolveJimengPromptFieldForFill() {
-    var strict = findJimengPromptField();
-    if (strict) return strict;
-    if (document.hidden) {
-      return findJimengPromptFieldRelaxed();
-    }
-    return null;
-  }
-
-  function waitForVisibilityUnhidden(maxMs) {
-    return new Promise(function (resolve) {
-      if (!document.hidden) {
-        resolve();
-        return;
-      }
-      var settled = false;
-      var tid = setTimeout(function () {
-        if (settled) return;
-        settled = true;
-        try {
-          document.removeEventListener('visibilitychange', onVis);
-        } catch (e) {}
-        resolve();
-      }, Math.max(0, maxMs));
-      function onVis() {
-        if (document.hidden) return;
-        if (settled) return;
-        settled = true;
-        clearTimeout(tid);
-        try {
-          document.removeEventListener('visibilitychange', onVis);
-        } catch (e2) {}
-        resolve();
-      }
-      document.addEventListener('visibilitychange', onVis);
-    });
-  }
-
-  /** Step14 专用：在页内轮询 + hidden 时等 visibility 或放宽选择器 */
-  async function waitForJimengPromptFieldForFill(roundId, stepKey) {
-    var start = Date.now();
-    var lastLog = 0;
-    while (Date.now() - start < STEP14_PROMPT_FIELD_MAX_WAIT_MS) {
-      var target = resolveJimengPromptFieldForFill();
-      if (target) {
-        appendMainLog(
-          roundId,
-          stepKey,
-          'debug',
-          'Step14.debug.promptFieldReady hidden=' + document.hidden + ' elapsedMs=' + (Date.now() - start),
-        );
-        return target;
-      }
-      var now = Date.now();
-      if (now - lastLog >= STEP14_PROMPT_FIELD_LOG_EVERY_MS) {
-        lastLog = now;
-        appendMainLog(
-          roundId,
-          stepKey,
-          'debug',
-          'Step14.debug.waitPromptField hidden=' + document.hidden + ' elapsedMs=' + (now - start),
-        );
-      }
-      if (document.hidden) {
-        await waitForVisibilityUnhidden(2000);
-      }
-      await delay(STEP14_PROMPT_FIELD_POLL_MS);
-    }
     return null;
   }
 
@@ -1250,7 +1152,7 @@
   async function runStep14FillPromptText(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step14_jimeng_fill_prompt_text';
-    var target = await waitForJimengPromptFieldForFill(roundId, stepKey);
+    var target = findJimengPromptField();
     if (!target) {
       appendMainLog(roundId, stepKey, 'info', 'Step14.动作失败+未找到提示词输入区域');
       return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };

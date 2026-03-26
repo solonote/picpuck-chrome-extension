@@ -500,7 +500,7 @@ export async function step13_jimeng_paste_reference_clear_prompt(ctx) {
   });
 }
 
-/** 写入用户提示词（含占位符文案）；页内分阶段等待提示词区（含 hidden 放宽 offsetParent） */
+/** 写入用户提示词（含占位符文案） */
 export async function step14_jimeng_fill_prompt_text(ctx) {
   const { payload } = ctx;
   await execJimengMainRunner(ctx, {
