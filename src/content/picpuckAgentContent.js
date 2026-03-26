@@ -505,10 +505,19 @@
     }
     const { step: stepNum, action: actionText } = parseStepFromLastInfo(lastInfo);
     if (stepLabelEl) {
-      stepLabelEl.textContent = 'STEP ' + (stepNum != null ? String(stepNum).padStart(2, '0') : '--') + ' //';
+      if (!busy) {
+        stepLabelEl.style.display = 'none';
+      } else {
+        stepLabelEl.style.display = '';
+        stepLabelEl.textContent = 'STEP ' + (stepNum != null ? String(stepNum).padStart(2, '0') : '--') + ' //';
+      }
     }
     if (stepActEl) {
-      stepActEl.textContent = actionText || (lastInfo ? lastInfo : '—');
+      if (!busy) {
+        stepActEl.textContent = '操作已完成，您可以离开此页面';
+      } else {
+        stepActEl.textContent = actionText || (lastInfo ? lastInfo : '—');
+      }
     }
   }
 

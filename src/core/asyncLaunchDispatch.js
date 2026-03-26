@@ -77,7 +77,11 @@ export async function dispatchAsyncGenerationLaunch(callerTabId, asyncJobId) {
   const launchResult = await masterDispatch(clientRequestId, command, payload, callerTabId);
   if (launchResult.ok) {
     try {
-      await dispatchAsyncGenerationRecover(callerTabId, payload);
+      const core = String(payload.core_engine || '').trim();
+      // 即梦：第二阶段由熔炉单独发 RECOVER；仅 Gemini 在启动成功后串联占位 recover。
+      if (core.startsWith('gemini_agent')) {
+        await dispatchAsyncGenerationRecover(callerTabId, payload);
+      }
     } catch (e) {
       console.error('[PicPuck] dispatchAsyncGenerationRecover', e);
     }

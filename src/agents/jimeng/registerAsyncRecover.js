@@ -1,13 +1,9 @@
 /**
- * 异步「找回」占位：PATCH → 可取消等待 → complete（FAILED 占位）（设计 **02** 第二阶段）。
+ * 异步「找回」：熔炉定时/轮询触发 `RECOVER`；allocateTab 复用空闲即梦 Tab 或新开；按锚点单次检查 → 未就绪则释放 → 就绪则取回并回传。
  */
 import { registerAgentCommands } from '../../core/registry.js';
 import { JIMENG_AI_TOOL_HOME } from './jimengUrls.js';
-import {
-  step04_recover_patch_remote_ready_placeholder,
-  step05_recover_poll_placeholder,
-  step06_recover_complete_placeholder_failed,
-} from '../../core/asyncRecoverSteps.js';
+import { step04_jimeng_recover_fetch, step05_jimeng_recover_relay_to_caller } from './steps.js';
 
 registerAgentCommands([
   {
@@ -15,10 +11,7 @@ registerAgentCommands([
     picpuckAction: '__internal_jimeng_async_recover',
     homeUrl: 'https://jimeng.jianying.com',
     taskBaseUrl: JIMENG_AI_TOOL_HOME,
-    steps: [
-      step04_recover_patch_remote_ready_placeholder,
-      step05_recover_poll_placeholder,
-      step06_recover_complete_placeholder_failed,
-    ],
+    recoverAllocateSilentDefault: true,
+    steps: [step04_jimeng_recover_fetch, step05_jimeng_recover_relay_to_caller],
   },
 ]);

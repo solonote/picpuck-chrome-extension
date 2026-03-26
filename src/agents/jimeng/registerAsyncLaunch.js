@@ -1,5 +1,6 @@
 /**
- * 异步生成「启动阶段」：即梦仅跑到提交/Enter（设计 **11**、**14**），不含等待出图与回传。
+ * 异步生成「启动阶段」：提交到 Step19 捕获锚点 + Step20 PATCH 后端；
+ * 等待出图与回传由熔炉稍后发起 `picpuckAsyncPhase: RECOVER`（JIMENG_ASYNC_RECOVER）。
  */
 import { registerAgentCommands } from '../../core/registry.js';
 import { JIMENG_AI_TOOL_HOME } from './jimengUrls.js';
@@ -18,6 +19,8 @@ import {
   step16_jimeng_set_logged_in_marker,
   step17_jimeng_click_generate_if_needed,
   step18_jimeng_submit_prompt_enter_if_configured,
+  step19_jimeng_wait_generation_started,
+  step20_jimeng_patch_remote_after_anchor,
 } from './steps.js';
 
 registerAgentCommands([
@@ -41,6 +44,8 @@ registerAgentCommands([
       step16_jimeng_set_logged_in_marker,
       step17_jimeng_click_generate_if_needed,
       step18_jimeng_submit_prompt_enter_if_configured,
+      step19_jimeng_wait_generation_started,
+      step20_jimeng_patch_remote_after_anchor,
     ],
   },
 ]);

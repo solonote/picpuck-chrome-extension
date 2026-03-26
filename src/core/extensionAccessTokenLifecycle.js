@@ -64,11 +64,6 @@ async function refreshOrReissue() {
     await scheduleRefreshAlarm();
     return true;
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes('MCUP_ASYNC_REFRESH_THROTTLED') || msg.includes('429')) {
-      await scheduleRefreshAlarm();
-      return false;
-    }
     await clearTokenSession();
     const issued = await issueFromFurnaceTab();
     if (!issued) installFurnaceTabWatchers();
@@ -108,12 +103,9 @@ async function issueFromFurnaceTab() {
         await scheduleRefreshAlarm();
         try {
           await mcupRefreshExtensionAccessToken();
-        } catch (e2) {
-          const m2 = e2 instanceof Error ? e2.message : String(e2);
-          if (!m2.includes('MCUP_ASYNC_REFRESH_THROTTLED') && !m2.includes('429')) {
-            await clearTokenSession();
-            return false;
-          }
+        } catch {
+          await clearTokenSession();
+          return false;
         }
         return true;
       }
@@ -232,12 +224,22 @@ export async function ensureMcupExtensionAccessTokenOrThrow() {
     typeof session.picpuckMcupApiBase === 'string' ? session.picpuckMcupApiBase : '',
   );
   if (token && apiBase) {
+    const tokenBefore = token;
     try {
       await mcupRefreshExtensionAccessToken();
       return;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes('MCUP_ASYNC_REFRESH_THROTTLED') || msg.includes('429')) return;
+      const again = await chrome.storage.session.get([
+        'picpuckMcupExtensionAccessToken',
+        'picpuckMcupApiBase',
+      ]);
+      const tokenAfter =
+        typeof again.picpuckMcupExtensionAccessToken === 'string'
+          ? again.picpuckMcupExtensionAccessToken.trim()
+          : '';
+      if (tokenAfter && tokenAfter !== tokenBefore) {
+        return;
+      }
       await clearTokenSession();
     }
   }

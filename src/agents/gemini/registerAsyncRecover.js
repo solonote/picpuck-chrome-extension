@@ -15,6 +15,7 @@ registerAgentCommands([
     picpuckAction: '__internal_gemini_async_recover',
     homeUrl: 'https://gemini.google.com',
     taskBaseUrl: GEMINI_APP_HOME,
+    recoverAllocateSilentDefault: true,
     steps: [
       step04_recover_patch_remote_ready_placeholder,
       step05_recover_poll_placeholder,

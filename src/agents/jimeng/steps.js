@@ -14,6 +14,9 @@ import {
   JIMENG_WORKBENCH_NOT_READY,
 } from './jimengErrorCodes.js';
 import { JIMENG_AI_TOOL_HOME, isJimengAiToolHomeUrl } from './jimengUrls.js';
+import { ensureMcupExtensionAccessTokenOrThrow } from '../../core/extensionAccessTokenLifecycle.js';
+import { mcupPatchExtensionState } from '../../core/mcupGenerationAsyncApi.js';
+import { focusWorkTab } from '../../core/allocateTab.js';
 
 /** 设计 §3.1.1：与 `manifest.json` `web_accessible_resources` 路径一致 */
 const JIMENG_IMAGE_MAIN_WORLD_FILE = 'src/agents/jimeng/jimengImageMainWorld.js';
@@ -154,6 +157,49 @@ async function execJimengMainRunnerWithResult(ctx, opts) {
   return r;
 }
 
+/**
+ * JIMENG_ASYNC_RECOVER：页内返回 `outcome:not_ready` 时仅 info，不记「完成步骤」。
+ */
+async function execJimengRecoverMainRunner(ctx, opts) {
+  const { tabId, roundId } = ctx;
+  const { nn, stepKey, runnerName, mainPayload, failUserMsg, startMsg, doneMsg } = opts;
+  logStepEnter(tabId, roundId, stepKey, nn, startMsg);
+  try {
+    await ensureJimengImageMainWorldInjected(tabId);
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    logStepFail(tabId, roundId, stepKey, nn, '动作失败+页内即梦脚本注入失败请刷新页面后重试', m.slice(0, 500));
+    throw new Error(JIMENG_IMAGE_MAIN_INJECT_FAILED);
+  }
+  const mergedPayload = { roundId, ...mainPayload };
+  const [injRes] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: async (packed) => {
+      const g = typeof globalThis !== 'undefined' ? globalThis : window;
+      const inj = g.__picpuckJimengImage;
+      if (!inj || typeof inj[packed.runnerName] !== 'function') {
+        return { ok: false, code: 'JIMENG_IMAGE_MAIN_INJECT_FAILED' };
+      }
+      return inj[packed.runnerName](packed.payload);
+    },
+    args: [{ runnerName, payload: mergedPayload }],
+  });
+  const r = injRes?.result;
+  if (!r || r.ok !== true) {
+    const code = r && r.code ? String(r.code) : JIMENG_WORKBENCH_NOT_READY;
+    const detail = r && typeof r.detail === 'string' ? r.detail : '';
+    logStepFail(tabId, roundId, stepKey, nn, failUserMsg, (detail || code).slice(0, 500));
+    throw new Error(code);
+  }
+  if (r.outcome === 'not_ready') {
+    logStepInfo(tabId, roundId, stepKey, nn, '即梦尚未生成完成或结果图未就绪');
+    return r;
+  }
+  logStepDone(tabId, roundId, stepKey, nn, doneMsg);
+  return r;
+}
+
 function generationEventFieldString(ge, k) {
   const v = ge[k];
   if (v == null) return '';
@@ -168,6 +214,23 @@ function generationEventFieldsComplete(payload) {
   if (!ge || typeof ge !== 'object') return false;
   const s = (k) => generationEventFieldString(ge, k);
   return !!(s('projectId') && s('subjectType') && s('subjectId') && s('inputPrompt') && s('coreEngine'));
+}
+
+/** Step19 页内 DOM 锚点（data-id、列表项 id、提示词预览）并入回传 generationEvent，供后端与后续取图一致。 */
+function buildJimengRelayGenerationEvent(payload, ctx) {
+  const ge =
+    payload && payload.generationEvent && typeof payload.generationEvent === 'object'
+      ? { ...payload.generationEvent }
+      : {};
+  const a = ctx && ctx.jimengRecordAnchor;
+  if (!a || typeof a !== 'object') return ge;
+  const did = generationEventFieldString(a, 'dataId');
+  const rid = generationEventFieldString(a, 'recordItemId');
+  const pv = generationEventFieldString(a, 'promptPreview');
+  if (did) ge.jimeng_record_data_id = did;
+  if (rid) ge.jimeng_record_item_id = rid;
+  if (pv) ge.jimeng_prompt_preview = pv.length > 4000 ? pv.slice(0, 4000) : pv;
+  return ge;
 }
 
 /**
@@ -505,7 +568,7 @@ export async function step19_jimeng_wait_generation_started(ctx) {
     logStepInfo(tabId, roundId, stepKey, 19, '本步跳过');
     return;
   }
-  await execJimengMainRunner(ctx, {
+  const r = await execJimengMainRunnerWithResult(ctx, {
     nn: 19,
     stepKey,
     runnerName: 'runStep19WaitGenerationStarted',
@@ -514,6 +577,48 @@ export async function step19_jimeng_wait_generation_started(ctx) {
     startMsg: '等待即梦出现生成中界面',
     doneMsg: '已检测到生成中状态',
   });
+  if (r && r.jimengRecordAnchor && typeof r.jimengRecordAnchor === 'object') {
+    ctx.jimengRecordAnchor = r.jimengRecordAnchor;
+  }
+}
+
+/**
+ * 仅 JIMENG_ASYNC_LAUNCH：Step19 拿到锚点后 PATCH 后端，供熔炉/后端持久化；不在此阶段等待出图。
+ */
+export async function step20_jimeng_patch_remote_after_anchor(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step20_jimeng_patch_remote_after_anchor';
+  if (payload.jimengSubmitMode !== 'enter') {
+    logStepInfo(tabId, roundId, stepKey, 20, '本步跳过');
+    return;
+  }
+  const aj =
+    payload && typeof payload.async_job_id === 'string' ? payload.async_job_id.trim().toLowerCase() : '';
+  if (!/^[a-z0-9]{12}$/.test(aj)) {
+    logStepFail(tabId, roundId, stepKey, 20, '动作失败+缺少有效 async_job_id 无法同步锚点', '');
+    throw new Error('JIMENG_ASYNC_NO_JOB_ID');
+  }
+  const anchor = ctx.jimengRecordAnchor;
+  if (!anchor || typeof anchor !== 'object') {
+    logStepFail(tabId, roundId, stepKey, 20, '动作失败+未捕获即梦锚点无法同步后端', '');
+    throw new Error('JIMENG_ANCHOR_MISSING');
+  }
+  const projectId = String(payload.projectId || '').trim();
+  if (!projectId) {
+    logStepFail(tabId, roundId, stepKey, 20, '动作失败+缺少 projectId 无法同步锚点', '');
+    throw new Error('JIMENG_ASYNC_NO_PROJECT');
+  }
+  logStepEnter(tabId, roundId, stepKey, 20, '将即梦锚点同步至后端');
+  await ensureMcupExtensionAccessTokenOrThrow();
+  await mcupPatchExtensionState({
+    projectId,
+    async_job_id: aj,
+    extension_run_phase: 'EXT_REMOTE_READY_PENDING_FETCH',
+    extension_remote_context: JSON.stringify({
+      jimengRecordAnchor: anchor,
+    }),
+  });
+  logStepDone(tabId, roundId, stepKey, 20, '锚点已同步');
 }
 
 /** 等待生成结束并统计结果图张数；自 Enter 起总超时 600s */
@@ -528,7 +633,11 @@ export async function step20_jimeng_wait_generation_finished(ctx) {
     nn: 20,
     stepKey,
     runnerName: 'runStep20WaitGenerationFinished',
-    mainPayload: { enterAtMs: ctx.jimengEnterAtMs, jimengSubmitMode: 'enter' },
+    mainPayload: {
+      enterAtMs: ctx.jimengEnterAtMs,
+      jimengSubmitMode: 'enter',
+      jimengRecordAnchor: ctx.jimengRecordAnchor,
+    },
     failUserMsg: '动作失败+等待即梦生成完成超时或无输出图',
     startMsg: '等待即梦生成完成并统计结果图',
     doneMsg: '生成已完成',
@@ -561,7 +670,7 @@ export async function step21_jimeng_collect_images_via_context_menu(ctx) {
       nn: 21,
       stepKey: 'step21_jimeng_infer_n_from_dom',
       runnerName: 'runJimengCountNewestRecordImages',
-      mainPayload: { roundId },
+      mainPayload: { roundId, jimengRecordAnchor: ctx.jimengRecordAnchor },
       failUserMsg: '动作失败+页面上未找到可复制的即梦结果图',
       startMsg: '推断最新记录（data-index=0）结果图张数',
       doneMsg: '已确定待复制张数',
@@ -572,7 +681,7 @@ export async function step21_jimeng_collect_images_via_context_menu(ctx) {
     nn: 21,
     stepKey,
     runnerName: 'runStep21CollectImagesViaContextMenu',
-    mainPayload: { n, jimengSubmitMode: 'enter' },
+    mainPayload: { n, jimengSubmitMode: 'enter', jimengRecordAnchor: ctx.jimengRecordAnchor },
     failUserMsg: '动作失败+通过右键菜单收集即梦结果图失败',
     startMsg: '逐张右键复制图片并读取剪贴板',
     doneMsg: '已收集全部结果图',
@@ -594,7 +703,7 @@ export async function step22_jimeng_relay_images_to_caller(ctx) {
   }
   logStepEnter(tabId, roundId, stepKey, 22, '将生成图回传至熔炉页');
   const images = ctx.jimengCollectedImages;
-  const ge = payload.generationEvent;
+  const ge = buildJimengRelayGenerationEvent(payload, ctx);
   try {
     await relayImagePayloadChunkedToTab({
       relayId: roundId,
@@ -607,4 +716,65 @@ export async function step22_jimeng_relay_images_to_caller(ctx) {
     throw e instanceof Error ? e : new Error(String(e));
   }
   logStepDone(tabId, roundId, stepKey, 22, '已回传生成图至熔炉页');
+}
+
+/** JIMENG_ASYNC_RECOVER：单次按锚点检查 → 可取回则收集（未完成则本轮成功结束、不回传） */
+export async function step04_jimeng_recover_fetch(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step04_jimeng_recover_fetch';
+  if (!payload.jimengRecordAnchor || typeof payload.jimengRecordAnchor !== 'object') {
+    logStepFail(tabId, roundId, stepKey, 4, '动作失败+payload 缺少 jimengRecordAnchor', '');
+    throw new Error('JIMENG_RECOVER_NO_ANCHOR');
+  }
+  ctx.jimengRecordAnchor = payload.jimengRecordAnchor;
+  const r = await execJimengRecoverMainRunner(ctx, {
+    nn: 4,
+    stepKey,
+    runnerName: 'runJimengRecoverPipeline',
+    mainPayload: { jimengRecordAnchor: payload.jimengRecordAnchor },
+    failUserMsg: '动作失败+即梦找回页内执行失败',
+    startMsg: '按锚点检查是否可取回并收集结果图',
+    doneMsg: '已取回结果图',
+  });
+  if (r && r.outcome === 'not_ready') {
+    ctx.jimengRecoverOutcome = 'not_ready';
+    ctx.jimengCollectedImages = [];
+    return;
+  }
+  ctx.jimengRecoverOutcome = 'ready';
+  ctx.jimengCollectedImages = Array.isArray(r.images) ? r.images : [];
+  await focusWorkTab(tabId);
+}
+
+/** JIMENG_ASYNC_RECOVER：仅在 Step04 已就绪时回传熔炉 */
+export async function step05_jimeng_recover_relay_to_caller(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step05_jimeng_recover_relay_to_caller';
+  if (ctx.jimengRecoverOutcome !== 'ready') {
+    logStepInfo(tabId, roundId, stepKey, 5, '本轮未就绪或无可回传图');
+    return;
+  }
+  if (!generationEventFieldsComplete(payload)) {
+    logStepInfo(tabId, roundId, stepKey, 5, '缺少 generationEvent 完整字段已跳过图片回传');
+    return;
+  }
+  const images = ctx.jimengCollectedImages;
+  if (!Array.isArray(images) || images.length < 1) {
+    logStepInfo(tabId, roundId, stepKey, 5, '无图片可回传');
+    return;
+  }
+  logStepEnter(tabId, roundId, stepKey, 5, '将生成图回传至熔炉页');
+  const ge = buildJimengRelayGenerationEvent(payload, ctx);
+  try {
+    await relayImagePayloadChunkedToTab({
+      relayId: roundId,
+      generationEvent: ge,
+      images,
+    });
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    logStepFail(tabId, roundId, stepKey, 5, '动作失败+回传熔炉页失败请保持熔炉页打开', m.slice(0, 500));
+    throw e instanceof Error ? e : new Error(String(e));
+  }
+  logStepDone(tabId, roundId, stepKey, 5, '已回传生成图至熔炉页');
 }

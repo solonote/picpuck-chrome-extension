@@ -7,3 +7,5 @@ export const LOG_APPEND = 'LOG_APPEND';
 export const ROUND_PHASE = 'ROUND_PHASE';
 /** SW → 熔炉 content：转 `window.postMessage`（设计 **12** B） */
 export const PICPUCK_ASYNC_GEN_PAGE = 'PICPUCK_ASYNC_GEN_PAGE';
+/** SW → 熔炉：即梦异步 RECOVER 已受理 */
+export const PICPUCK_ASYNC_GEN_RECOVER_RECEIVED = 'PICPUCK_ASYNC_GEN_RECOVER_RECEIVED';

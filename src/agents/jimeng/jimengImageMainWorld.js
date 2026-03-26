@@ -824,13 +824,14 @@
     return false;
   }
 
-  function clickJimengReferenceOption(imageNum) {
+  async function clickJimengReferenceOption(imageNum) {
     var popup = doc.querySelector('.lv-select-popup');
     var options = popup ? popup.querySelectorAll('li[role="option"]') : [];
     for (var oi = 0; oi < options.length; oi++) {
       var li = options[oi];
       var mm = (li.textContent || '').match(/图片(\d+)/);
       if (mm && parseInt(mm[1], 10) === imageNum) {
+        await delay(100);
         li.click();
         return true;
       }
@@ -1066,7 +1067,7 @@
       }
       target.dispatchEvent(new Event('input', { bubbles: true }));
       await delay(POPUP_WAIT_MS_AT);
-      var clicked = clickJimengReferenceOption(n);
+      var clicked = await clickJimengReferenceOption(n);
       appendMainLog(roundId, stepKey, 'debug', 'Step15.debug.refOption n=' + n + ' ok=' + clicked);
       await delay(AFTER_OPTION_MS_AT);
     }
@@ -1172,6 +1173,135 @@
       scope.querySelector('[class*="ai-generated-record-content"]') ||
       scope.querySelector('[class*="image-record-content"]');
     return alt || null;
+  }
+
+  /**
+   * 从即梦列表项根节点取锚点（提交后出现、生成中与完成后 id/data-id 不变），供 Step20/21 锁定同一条记录。
+   * 选择器用 `[class*="prompt-value-container"]`，避免写死 CSS Modules 哈希段。
+   */
+  function extractJimengRecordAnchorFromRoot(root) {
+    if (!root || !root.getAttribute) return null;
+    var dataId = root.getAttribute('data-id') || '';
+    var recordItemId = root.getAttribute('id') || '';
+    var promptPreview = '';
+    try {
+      var pv = root.querySelector('[class*="prompt-value-container"]');
+      if (pv) promptPreview = String(pv.innerText || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 2000);
+    } catch (eP) {
+      /* ignore */
+    }
+    if (!dataId.trim() && !recordItemId.trim()) return null;
+    return { dataId: dataId.trim(), recordItemId: recordItemId.trim(), promptPreview: promptPreview };
+  }
+
+  function normalizeJimengPromptText(s) {
+    return String(s || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /**
+   * 有 promptPreview 时必须与当前 DOM 一致（规范化后全等或前缀一致），避免用户后续又生成导致误认别的条。
+   * 无 promptPreview 时仅信 id。
+   */
+  function jimengPromptMatchesAnchor(root, anchor) {
+    if (!root || !anchor || typeof anchor !== 'object') return true;
+    var exp = anchor.promptPreview;
+    if (typeof exp !== 'string' || !exp.trim()) return true;
+    var pv = root.querySelector('[class*="prompt-value-container"]');
+    var dom = normalizeJimengPromptText(pv ? pv.innerText : '');
+    var want = normalizeJimengPromptText(exp);
+    if (!want) return true;
+    if (dom === want) return true;
+    var max = Math.min(300, want.length, dom.length);
+    if (max >= 40 && dom.slice(0, max) === want.slice(0, max)) return true;
+    return false;
+  }
+
+  function isJimengRecordRootVisible(el) {
+    if (!el || !el.getBoundingClientRect) return false;
+    var r = el.getBoundingClientRect();
+    return r.width >= 4 && r.height >= 4;
+  }
+
+  /** 同一 data-id 可能对应多个 DOM 节点（嵌套），只取 `item-*` 列表项且可见者。 */
+  function listJimengItemRootsByDataId(d, dataId) {
+    var idVal = String(dataId).trim();
+    if (!idVal) return [];
+    var esc = idVal.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    var sel = 'div[class*="item-"][data-id="' + esc + '"]';
+    var nodes;
+    try {
+      nodes = d.querySelectorAll(sel);
+    } catch (e) {
+      return [];
+    }
+    var out = [];
+    var i;
+    var el;
+    for (i = 0; i < nodes.length; i++) {
+      el = nodes[i];
+      if (el.getAttribute && el.getAttribute('data-id') === idVal && isJimengRecordRootVisible(el)) out.push(el);
+    }
+    return out;
+  }
+
+  function pickJimengRecordRootFromCandidates(candidates, anchor) {
+    if (!candidates || candidates.length < 1) return null;
+    var matched = [];
+    var i;
+    var el;
+    for (i = 0; i < candidates.length; i++) {
+      el = candidates[i];
+      if (!isJimengRecordRootVisible(el)) continue;
+      if (jimengPromptMatchesAnchor(el, anchor)) matched.push(el);
+    }
+    if (matched.length >= 1) return matched[0];
+    return null;
+  }
+
+  /**
+   * 找回记录：**不用 data-index**（用户可能继续生成，index 会变）。依赖 Step19 记录的 `recordItemId`、`data-id` + 提示词对比。
+   * 无 anchor 时仍用「最新一条」启发式（仅 Step19 首次发现）。
+   * @param {Document} docRef
+   * @param {{ dataId?: string, recordItemId?: string, promptPreview?: string } | null | undefined} anchor
+   */
+  function resolveJimengRecordRoot(docRef, anchor) {
+    var d = docRef || doc;
+    if (!anchor || typeof anchor !== 'object') {
+      return findLatestJimengGenerationRecordRoot(d);
+    }
+
+    var hasId =
+      (typeof anchor.recordItemId === 'string' && anchor.recordItemId.trim()) ||
+      (typeof anchor.dataId === 'string' && anchor.dataId.trim());
+    if (!hasId) {
+      return null;
+    }
+
+    var rid = anchor.recordItemId;
+    if (typeof rid === 'string' && rid.trim()) {
+      try {
+        var byId = d.getElementById(rid.trim());
+        if (byId && isJimengRecordRootVisible(byId) && jimengPromptMatchesAnchor(byId, anchor)) {
+          return byId;
+        }
+      } catch (eId) {
+        /* ignore */
+      }
+    }
+
+    var dataId = anchor.dataId;
+    if (typeof dataId === 'string' && dataId.trim()) {
+      var candidates = listJimengItemRootsByDataId(d, dataId);
+      var picked = pickJimengRecordRootFromCandidates(candidates, anchor);
+      if (picked) return picked;
+    }
+
+    return null;
   }
 
   function isJimengRecordGenerating(root) {
@@ -1744,10 +1874,19 @@
     var enterAtMs = payload && typeof payload.enterAtMs === 'number' ? payload.enterAtMs : Date.now();
     var deadlineStart = enterAtMs + 120000;
     while (Date.now() < deadlineStart) {
-      var root = findLatestJimengGenerationRecordRoot(doc);
+      var root = resolveJimengRecordRoot(doc, null);
       if (root && isJimengRecordGenerating(root)) {
+        var jimengRecordAnchor = extractJimengRecordAnchorFromRoot(root);
+        if (jimengRecordAnchor && jimengRecordAnchor.dataId) {
+          appendMainLog(
+            roundId,
+            stepKey,
+            'debug',
+            'Step19.debug.jimengRecordAnchor dataId=' + jimengRecordAnchor.dataId.slice(0, 8) + '…',
+          );
+        }
         appendMainLog(roundId, stepKey, 'info', 'Step19.已检测到生成中状态');
-        return { ok: true };
+        return { ok: true, jimengRecordAnchor: jimengRecordAnchor || undefined };
       }
       await delay(200);
     }
@@ -1759,12 +1898,13 @@
   async function runStep20WaitGenerationFinished(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step20_jimeng_wait_generation_finished';
+    var anchor = payload && payload.jimengRecordAnchor;
     var enterAtMs = payload && typeof payload.enterAtMs === 'number' ? payload.enterAtMs : Date.now();
     var deadlineTotal = enterAtMs + 600000;
     var lastSlotCount = -1;
     var tick = 0;
     while (Date.now() < deadlineTotal) {
-      var root = findLatestJimengGenerationRecordRoot(doc);
+      var root = resolveJimengRecordRoot(doc, anchor);
       if (!root) {
         await delay(350);
         continue;
@@ -1796,7 +1936,7 @@
       tick++;
       await delay(400);
     }
-    var root2 = findLatestJimengGenerationRecordRoot(doc);
+    var root2 = resolveJimengRecordRoot(doc, anchor);
     if (root2 && !isJimengRecordGenerating(root2)) {
       var slots2 = listJimengResultCardSlotElements(root2);
       var v2 = listJimengResultImagesOrdered(root2);
@@ -1823,10 +1963,11 @@
   async function runJimengCountNewestRecordImages(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step21_jimeng_infer_n_from_dom';
+    var anchor = payload && payload.jimengRecordAnchor;
     var inferDeadline = Date.now() + 30000;
     var lastLogSlots = -1;
     while (Date.now() < inferDeadline) {
-      var root = findLatestJimengGenerationRecordRoot(doc);
+      var root = resolveJimengRecordRoot(doc, anchor);
       if (!root) break;
       var slots = listJimengResultCardSlotElements(root);
       var sc = slots.length;
@@ -1847,7 +1988,7 @@
       }
       await delay(400);
     }
-    var root2 = findLatestJimengGenerationRecordRoot(doc);
+    var root2 = resolveJimengRecordRoot(doc, anchor);
     var slots2 = listJimengResultCardSlotElements(root2);
     var imgs = listJimengResultImagesOrdered(root2);
     var n = imgs.length;
@@ -1867,6 +2008,7 @@
   async function runStep21CollectImagesViaContextMenu(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step21_jimeng_collect_images_via_context_menu';
+    var anchor = payload && payload.jimengRecordAnchor;
     var n = payload && typeof payload.n === 'number' ? payload.n : 0;
     if (n < 1) {
       appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图张数无效');
@@ -1877,7 +2019,7 @@
     var imgs0 = [];
     var root0 = null;
     while (Date.now() < alignDeadline) {
-      root0 = findLatestJimengGenerationRecordRoot(doc);
+      root0 = resolveJimengRecordRoot(doc, anchor);
       if (root0) {
         nudgeJimengLazyResultCardsIntoView(root0, listJimengResultCardSlotElements(root0));
       }
@@ -1893,7 +2035,7 @@
     var prevB64 = '';
     var ii;
     for (ii = 0; ii < n; ii++) {
-      var rootFresh = findLatestJimengGenerationRecordRoot(doc);
+      var rootFresh = resolveJimengRecordRoot(doc, anchor);
       var imgsFresh = listJimengResultImagesOrdered(rootFresh);
       if (imgsFresh.length <= ii) {
         appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图数量不足');
@@ -2049,6 +2191,57 @@
     return { ok: true, images: collected };
   }
 
+  /**
+   * 异步第二阶段单次轮询：按锚点定位记录；仍在生成/图未齐则 not_ready；就绪则复用 Step21 收集。
+   * @param {{ roundId?: string, jimengRecordAnchor?: { dataId?: string, recordItemId?: string, promptPreview?: string } }} payload
+   * @returns {Promise<{ ok: boolean, code?: string, outcome?: 'not_ready'|'ready', images?: Array<{ imageBase64: string, contentType?: string }> }>}
+   */
+  async function runJimengRecoverPipeline(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var anchor = payload && payload.jimengRecordAnchor;
+    var stepKey = 'step04_jimeng_recover_fetch';
+    if (!anchor || typeof anchor !== 'object') {
+      return { ok: false, code: 'JIMENG_RECOVER_NO_ANCHOR' };
+    }
+    var did = anchor.dataId && String(anchor.dataId).trim();
+    var rid = anchor.recordItemId && String(anchor.recordItemId).trim();
+    if (!did && !rid) {
+      return { ok: false, code: 'JIMENG_RECOVER_NO_ANCHOR' };
+    }
+    var root = resolveJimengRecordRoot(doc, anchor);
+    if (!root) {
+      appendMainLog(roundId, stepKey, 'info', 'Step04.即梦记录未出现在DOM');
+      return { ok: true, outcome: 'not_ready' };
+    }
+    if (isJimengRecordGenerating(root)) {
+      appendMainLog(roundId, stepKey, 'info', 'Step04.即梦仍在生成中');
+      return { ok: true, outcome: 'not_ready' };
+    }
+    var slots = listJimengResultCardSlotElements(root);
+    nudgeJimengLazyResultCardsIntoView(root, slots);
+    var valid = listJimengResultImagesOrdered(root);
+    if (slots.length >= 1 && valid.length < slots.length) {
+      appendMainLog(roundId, stepKey, 'debug', 'Step04.debug.recoverLazy valid=' + valid.length + ' slots=' + slots.length);
+      return { ok: true, outcome: 'not_ready' };
+    }
+    var n = slots.length >= 1 ? slots.length : valid.length;
+    if (n < 1) {
+      appendMainLog(roundId, stepKey, 'info', 'Step04.即梦记录上尚无可用结果图');
+      return { ok: true, outcome: 'not_ready' };
+    }
+    var collectPayload = {
+      roundId: roundId,
+      n: n,
+      jimengSubmitMode: 'enter',
+      jimengRecordAnchor: anchor,
+    };
+    var colRes = await runStep21CollectImagesViaContextMenu(collectPayload);
+    if (!colRes || colRes.ok !== true) {
+      return colRes;
+    }
+    return { ok: true, outcome: 'ready', images: colRes.images };
+  }
+
   g.__picpuckJimengImage = {
     runStep07EnsureWorkbenchReady: runStep07EnsureWorkbenchReady,
     runStep08CloseOpenPopovers: runStep08CloseOpenPopovers,
@@ -2066,5 +2259,6 @@
     runStep20WaitGenerationFinished: runStep20WaitGenerationFinished,
     runJimengCountNewestRecordImages: runJimengCountNewestRecordImages,
     runStep21CollectImagesViaContextMenu: runStep21CollectImagesViaContextMenu,
+    runJimengRecoverPipeline: runJimengRecoverPipeline,
   };
 })();

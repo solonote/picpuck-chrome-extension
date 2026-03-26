@@ -1,6 +1,7 @@
 /**
  * §9.4 allocateTab(command)：每次请求全量 `tabs.query`（§9.2）→ 按站点 `homeUrl` 前缀筛候选 → **再**筛 PicPuck 蓝组内 Tab（见 `picpuckWorkspaceTabGroup`）→
  * 按 tab.id 升序尝试 §9.3 原子抢占；无 idle 则 `tabs.create` 并入 PicPuck 组后再 `waitForTabUrlPrefix` 与抢占。
+ * `CommandRecord.recoverAllocateSilentDefault` 为 true 时：默认不激活工作 Tab（`tabs.create` 用 `active:false`）；`chrome.storage.sync.picpuckRecoverCheckFocusTab===true` 时恢复检查阶段即激活。
  */
 import { getCommandRecord } from './registry.js';
 import { injectableAcquireExecSlot } from './execSlot/injectableAcquireExecSlot.js';
@@ -9,6 +10,7 @@ import {
   ensureTabInPicpuckWorkspaceGroup,
   filterPicpuckWorkspaceCandidates,
 } from './picpuckWorkspaceTabGroup.js';
+import { getRecoverCheckFocusWorkTab } from './asyncRecoverTabPolicy.js';
 
 /** @typedef {{ ok: true, tabId: number }} AllocateTabOk */
 /** @typedef {{ ok: false, errorCode: string, message?: string }} AllocateTabFail */
@@ -27,6 +29,12 @@ export async function allocateTab(command) {
     return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'invalid CommandRecord urls' };
   }
 
+  /** 异步找回检查阶段：默认静默；`picpuckRecoverCheckFocusTab===true` 时与旧行为一致（分配即激活） */
+  let focusAfterAllocate = true;
+  if (rec.recoverAllocateSilentDefault === true) {
+    focusAfterAllocate = await getRecoverCheckFocusWorkTab();
+  }
+
   const all = await chrome.tabs.query({});
   const urlSorted = filterAndSortCandidates(all, homeUrl);
   const candidates = await filterPicpuckWorkspaceCandidates(urlSorted);
@@ -36,7 +44,9 @@ export async function allocateTab(command) {
     if (tab.id == null) continue;
     const got = await tryAcquireOnTab(tab.id);
     if (got.ok && got.acquired) {
-      await focusWorkTab(tab.id);
+      if (focusAfterAllocate) {
+        await focusWorkTab(tab.id);
+      }
       return { ok: true, tabId: tab.id };
     }
   }
@@ -47,7 +57,7 @@ export async function allocateTab(command) {
     return { ok: false, errorCode: 'TAB_POOL_EXHAUSTED' };
   }
 
-  const created = await chrome.tabs.create({ url: taskBaseUrl, active: true });
+  const created = await chrome.tabs.create({ url: taskBaseUrl, active: focusAfterAllocate });
   if (created.id == null) {
     return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'tabs.create no id' };
   }
@@ -70,7 +80,9 @@ export async function allocateTab(command) {
   if (!got.ok || !got.acquired) {
     return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'acquire after create failed' };
   }
-  await focusWorkTab(created.id);
+  if (focusAfterAllocate) {
+    await focusWorkTab(created.id);
+  }
   return { ok: true, tabId: created.id };
 }
 
@@ -79,10 +91,10 @@ export async function allocateTab(command) {
  * @returns {Promise<{ ok: boolean, acquired?: boolean, invalid?: boolean }>}
  */
 /**
- * 复用已有 Tab 时默认留在后台；每轮分配成功后激活该 Tab 并聚焦其窗口（第二轮及以后与 PicPuck 页同屏）。
+ * 激活工作 Tab 并聚焦其窗口（异步找回「取回」就绪后由步骤显式调用；普通指令在 allocateTab 内按需调用）。
  * @param {number} tabId
  */
-async function focusWorkTab(tabId) {
+export async function focusWorkTab(tabId) {
   try {
     const tab = await chrome.tabs.get(tabId);
     if (tab.windowId != null) {

@@ -42,7 +42,13 @@ export async function masterDispatch(clientRequestId, command, payload, callerTa
   if (command === 'GEMINI_IMAGE_FILL' && callerTabId != null && callerTabId > 0) {
     registerGeminiRelayCallerTab(roundId, callerTabId);
   }
-  if (command === 'JIMENG_IMAGE_FILL' && callerTabId != null && callerTabId > 0) {
+  if (
+    (command === 'JIMENG_IMAGE_FILL' ||
+      command === 'JIMENG_ASYNC_LAUNCH' ||
+      command === 'JIMENG_ASYNC_RECOVER') &&
+    callerTabId != null &&
+    callerTabId > 0
+  ) {
     registerJimengRelayCallerTab(roundId, callerTabId);
   }
 

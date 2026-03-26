@@ -1,5 +1,5 @@
 /**
- * 熔炉页 `picpuckAsyncGeneration`：PRE / DISPATCH / CANCEL（设计 **11**、**12**）。
+ * 熔炉页 `picpuckAsyncGeneration`：PRE / DISPATCH / RECOVER / CANCEL（设计 **11**、**12**）。
  */
 import {
   markAsyncJobCancelled,
@@ -7,8 +7,9 @@ import {
   registerActiveAsyncJob,
   setPendingPreSlot,
 } from './asyncGenerationState.js';
-import { PICPUCK_ASYNC_GEN_PAGE } from './runtimeMessages.js';
+import { PICPUCK_ASYNC_GEN_PAGE, PICPUCK_ASYNC_GEN_RECOVER_RECEIVED } from './runtimeMessages.js';
 import { dispatchAsyncGenerationFillOnly, dispatchAsyncGenerationLaunch } from './asyncLaunchDispatch.js';
+import { dispatchAsyncGenerationRecover } from './asyncRecoverDispatch.js';
 
 const ASYNC_ID_RE = /^[a-z0-9]{12}$/;
 
@@ -32,6 +33,25 @@ function validateHandshakeFields(p, opts) {
   if (!subjectId) return '缺少 subjectId';
   if (!core_engine) return '缺少 core_engine';
   if (typeof p.input_prompt !== 'string') return '缺少 input_prompt';
+  return undefined;
+}
+
+/**
+ * 即梦异步第二阶段：须含锚点（与 Step20 PATCH 写入 extension_remote_context 一致）。
+ * @returns {string|undefined}
+ */
+function validateJimengRecoverFields(p) {
+  const async_job_id = typeof p.async_job_id === 'string' ? p.async_job_id.trim().toLowerCase() : '';
+  if (!ASYNC_ID_RE.test(async_job_id)) return 'async_job_id 须为 12 位 [a-z0-9]';
+  const core = String(p.core_engine || '').trim();
+  if (!core.startsWith('jimeng_agent')) return 'RECOVER 当前仅支持 jimeng_agent';
+  const projectId = typeof p.projectId === 'string' ? p.projectId.trim() : '';
+  if (!projectId) return '缺少 projectId';
+  const a = p.jimengRecordAnchor;
+  if (!a || typeof a !== 'object') return '缺少 jimengRecordAnchor';
+  const dataId = typeof a.dataId === 'string' ? a.dataId.trim() : '';
+  const recordItemId = typeof a.recordItemId === 'string' ? a.recordItemId.trim() : '';
+  if (!dataId && !recordItemId) return 'jimengRecordAnchor 须含 dataId 或 recordItemId';
   return undefined;
 }
 
@@ -141,6 +161,26 @@ export async function handlePicpuckAsyncGeneration(payload, sender) {
       typeof payload.async_job_id === 'string' ? payload.async_job_id.trim().toLowerCase() : '';
     if (!ASYNC_ID_RE.test(async_job_id)) return { ok: false, error: 'async_job_id 无效' };
     markAsyncJobCancelled(async_job_id);
+    return { ok: true, asyncGenHandled: true };
+  }
+  if (phase === 'RECOVER') {
+    const err = validateJimengRecoverFields(payload);
+    if (err) return { ok: false, error: err };
+    const rest = { ...payload };
+    delete rest.picpuckAsyncPhase;
+    delete rest.type;
+    delete rest.action;
+    const merged = { ...rest };
+    const async_job_id =
+      typeof merged.async_job_id === 'string' ? merged.async_job_id.trim().toLowerCase() : '';
+    registerActiveAsyncJob(async_job_id);
+    await postEnvelopeToPage(tabId, {
+      type: PICPUCK_ASYNC_GEN_RECOVER_RECEIVED,
+      async_job_id,
+    });
+    void dispatchAsyncGenerationRecover(tabId, merged).catch((e) => {
+      console.error('[PicPuck] dispatchAsyncGenerationRecover', e);
+    });
     return { ok: true, asyncGenHandled: true };
   }
   return { ok: false, error: 'unknown picpuckAsyncPhase' };
