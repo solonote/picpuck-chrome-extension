@@ -197,6 +197,9 @@ async function matchesPicpuckWorkspaceGroupTab(tab, groupIdByWindowStr) {
  */
 export async function isTabInPicpuckWorkspaceGroup(tab) {
   await pruneStaleGroupMappings();
+  if (tab && typeof tab.windowId === 'number') {
+    await getOrSyncPicpuckGroupId(tab.windowId);
+  }
   const map = await loadGroupMap();
   return matchesPicpuckWorkspaceGroupTab(tab, map);
 }
@@ -208,6 +211,13 @@ export async function isTabInPicpuckWorkspaceGroup(tab) {
  */
 export async function filterPicpuckWorkspaceCandidates(tabsSorted) {
   await pruneStaleGroupMappings();
+  /** 冷启动 / 合并组后 session 里的 groupId 可能滞后；先按窗口与 Chrome 内真实 PicPuck 蓝组对齐，再比对 tab.groupId */
+  const uniqueWindowIds = [
+    ...new Set(tabsSorted.map((t) => t.windowId).filter((w) => typeof w === 'number')),
+  ];
+  for (const wid of uniqueWindowIds) {
+    await getOrSyncPicpuckGroupId(wid);
+  }
   const map = await loadGroupMap();
   const out = [];
   for (const tab of tabsSorted) {

@@ -21,6 +21,7 @@ import {
   geminiRelayForwardEnd,
 } from './relayImagePayloadChunked.js';
 import { handlePicpuckAsyncGeneration } from './asyncGenerationHandlers.js';
+import { dispatchAsyncGenerationRecover } from './asyncRecoverDispatch.js';
 import { isTabInPicpuckWorkspaceGroup } from './picpuckWorkspaceTabGroup.js';
 
 /** 与 `frontend-v2/src/utils/picpuckExtension.js` 中 PICPUCK_EXTENSION_COMMAND 一致 */
@@ -293,6 +294,55 @@ export function installRuntimeMessageHandlers() {
             touchGeminiRelayCallerTabTtl(roundId);
             await geminiRelayForwardEnd(callerTabId, roundId);
             clearGeminiRelayCallerTabRegistration(roundId);
+            sendResponse({ ok: true });
+          } catch (e) {
+            const m = e instanceof Error ? e.message : String(e);
+            sendResponse({ ok: false, error: m });
+          }
+        })();
+        return true;
+      }
+
+      /** 即梦：页内 watcher 每轮快照 → SW console（不依赖即梦 Tab 开 DevTools；LOG_APPEND 在 LAUNCH 结束后无 sink 会丢） */
+      if (payload.action === '__picpuckJimengWatcherTelemetry') {
+        const tel = payload.telemetry && typeof payload.telemetry === 'object' ? payload.telemetry : null;
+        const workTabId = sender.tab?.id;
+        if (tel) {
+          console.info('[PicPuck] JimengRecoverWatch', { workTabId, ...tel });
+        }
+        // #region agent log
+        fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd9d244' },
+          body: JSON.stringify({
+            sessionId: 'd9d244',
+            location: 'swMessages.js:JimengWatcherTelemetry',
+            message: 'watcher tick',
+            data: { workTabId: workTabId ?? null, telemetry: tel },
+            timestamp: Date.now(),
+            hypothesisId: 'W_TELEMETRY',
+          }),
+        }).catch(() => {});
+        // #endregion
+        sendResponse({ ok: true });
+        return;
+      }
+
+      /** 即梦：目标页 MAIN watcher 判定结果区就绪 → CS → 本处触发第二阶段 RECOVER（熔炉 Tab） */
+      if (payload.action === '__picpuckJimengPageRecoverReady') {
+        (async () => {
+          try {
+            const forgeTabId =
+              typeof payload.forgeCallerTabId === 'number' && Number.isFinite(payload.forgeCallerTabId)
+                ? Math.floor(payload.forgeCallerTabId)
+                : 0;
+            const recoverPayload =
+              payload.recoverPayload && typeof payload.recoverPayload === 'object' ? payload.recoverPayload : null;
+            if (forgeTabId <= 0 || !recoverPayload) {
+              sendResponse({ ok: false, error: 'bad_jimeng_page_recover_ready' });
+              return;
+            }
+            await dispatchAsyncGenerationRecover(forgeTabId, recoverPayload);
             sendResponse({ ok: true });
           } catch (e) {
             const m = e instanceof Error ? e.message : String(e);

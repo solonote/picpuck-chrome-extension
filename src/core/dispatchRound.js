@@ -4,7 +4,7 @@
 import { getCommandRecord } from './registry.js';
 import { getOrCreateRoundContext, appendLog, updatePhase, getContext } from './roundContext.js';
 import { releaseExecSlot } from './releaseExecSlot.js';
-import { clearJimengRelayCallerTabRegistration } from './relayCallerTabTTL.js';
+import { clearJimengRelayCallerTabRegistration, getJimengRelayCallerTabId } from './relayCallerTabTTL.js';
 import { inFlightByTabId, roundBinding } from './taskBindings.js';
 import { detachLogSink } from './logSink.js';
 import { isAsyncJobCancelled } from './asyncGenerationState.js';
@@ -15,7 +15,7 @@ import {
   frameworkStep02_attachLogSink,
   frameworkStep03_ensurePageHelpers,
 } from './frameworkPreflight.js';
-
+import { startJimengRecoverPageWatcherFromLaunch } from './jimengRecoverPageWatcherLaunch.js';
 /**
  * @param {{ clientRequestId: string, command: string, tabId: number, roundId: string, payload: Record<string, unknown> }} args
  * @returns {Promise<{ phase: string }>}
@@ -83,6 +83,60 @@ export async function dispatchRound(args) {
         throw Object.assign(new Error('STEP_OK_FALSE'), { stepResult: r });
       }
       assertAsyncJobNotCancelled();
+    }
+
+    if (command === 'JIMENG_ASYNC_LAUNCH') {
+      const aj = typeof payload.async_job_id === 'string' ? payload.async_job_id.trim().toLowerCase() : '';
+      const ajOk = /^[a-z0-9]{12}$/.test(aj);
+      const hasAnchor = !!(ctx.jimengRecordAnchor && typeof ctx.jimengRecordAnchor === 'object');
+      if (hasAnchor && ajOk) {
+        const callerTabId = getJimengRelayCallerTabId(roundId);
+        const recoverPayload = {
+          async_job_id: aj,
+          core_engine: String(payload.core_engine || '').trim(),
+          projectId: typeof payload.projectId === 'string' ? payload.projectId.trim() : '',
+          subjectType: typeof payload.subjectType === 'string' ? payload.subjectType.trim() : '',
+          subjectId: typeof payload.subjectId === 'string' ? payload.subjectId.trim() : '',
+          input_prompt: typeof payload.input_prompt === 'string' ? payload.input_prompt : '',
+          jimengRecordAnchor: ctx.jimengRecordAnchor,
+        };
+        void startJimengRecoverPageWatcherFromLaunch({
+          workTabId: tabId,
+          roundId,
+          async_job_id: aj,
+          forgeCallerTabId: typeof callerTabId === 'number' ? callerTabId : 0,
+          recoverPayload,
+        }).catch((e) => console.warn('[PicPuck] jimeng page watcher launch', e));
+        appendLog(tabId, {
+          ts: Date.now(),
+          roundId,
+          step: 'system',
+          level: 'info',
+          message: 'Step99.info.jimengRecoverPageWatcherStarted async_job_id=' + aj,
+        });
+      } else {
+        const mode = payload && payload.jimengSubmitMode;
+        const reason = !hasAnchor ? 'no_anchor' : 'bad_async_job_id';
+        console.warn('[PicPuck] WatchLoop 未开启', {
+          reason,
+          async_job_id: aj || '(empty)',
+          jimengSubmitMode: mode,
+          hint:
+            reason === 'no_anchor'
+              ? 'LAUNCH 结束时 ctx 无 jimengRecordAnchor（Step19 未写入或失败）'
+              : 'async_job_id 须为 12 位 [a-z0-9]',
+        });
+        appendLog(tabId, {
+          ts: Date.now(),
+          roundId,
+          step: 'system',
+          level: 'info',
+          message:
+            'Step99.info.watchLoopSkipped reason=' +
+            reason +
+            (mode != null ? ' jimengSubmitMode=' + String(mode) : ''),
+        });
+      }
     }
 
     appendLog(tabId, {

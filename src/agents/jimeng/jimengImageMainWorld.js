@@ -8,7 +8,11 @@
  */
 (function () {
   var g = typeof globalThis !== 'undefined' ? globalThis : window;
-  if (g.__picpuckJimengImage) return;
+  // 同页可能多次注入：LAUNCH 已创建 __picpuckJimengImage 后，仅当已含 watcher API 才跳过；
+  // 否则须重新跑完整 bundle（例如扩展升级后旧页内对象缺 startJimengRecoverPageWatcher）。
+  if (g.__picpuckJimengImage && typeof g.__picpuckJimengImage.startJimengRecoverPageWatcher === 'function') {
+    return;
+  }
 
   var doc = document;
   var DELAY_OPEN = 1000;
@@ -28,6 +32,23 @@
       /* ignore */
     }
   }
+
+  // #region agent log
+  function picpuckDbgIngest(hypothesisId, loc, msg, data) {
+    fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd9d244' },
+      body: JSON.stringify({
+        sessionId: 'd9d244',
+        location: loc,
+        message: msg,
+        data: data || {},
+        timestamp: Date.now(),
+        hypothesisId: hypothesisId,
+      }),
+    }).catch(function () {});
+  }
+  // #endregion
 
   function delay(ms) {
     return new Promise(function (resolve) {
@@ -824,21 +845,6 @@
     return false;
   }
 
-  async function clickJimengReferenceOption(imageNum) {
-    var popup = doc.querySelector('.lv-select-popup');
-    var options = popup ? popup.querySelectorAll('li[role="option"]') : [];
-    for (var oi = 0; oi < options.length; oi++) {
-      var li = options[oi];
-      var mm = (li.textContent || '').match(/图片(\d+)/);
-      if (mm && parseInt(mm[1], 10) === imageNum) {
-        await delay(100);
-        li.click();
-        return true;
-      }
-    }
-    return false;
-  }
-
   /** @param {{ roundId: string }} payload */
   async function runStep12ClearForm(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
@@ -884,8 +890,158 @@
   var PASTE_GAP_MS = 1000;
   var BEFORE_FIRST_PASTE_MS = 500;
   var AFTER_LAST_PASTE_SETTLE_MS = 1200;
-  var POPUP_WAIT_MS_AT = 550;
+  /** @ 后等待即梦「可能@的内容」下拉：须出现 .lv-select-popup 且已有 li[role="option"]（选项渲染完） */
+  var AT_POPUP_WAIT_MAX_MS = 12000;
+  /** 连续这么久仍无弹层则删掉 @ 再 insertText @ 一次（比合成左右键易生效） */
+  var AT_POPUP_STUCK_SLICE_MS = 1000;
+  var AT_POPUP_POLL_MS = 100;
+  var AT_POPUP_REINSERT_SETTLE_MS = 50;
   var AFTER_OPTION_MS_AT = 450;
+  /** 防止异常 DOM 死循环；正常每轮应处理掉一个 (参考图片N) */
+  var STEP15_MAX_PLACEHOLDER_ROUNDS = 64;
+
+  function tryJimengAtSelectPopupReady() {
+    var popup = doc.querySelector('.lv-select-popup');
+    if (!popup) return null;
+    var r = popup.getBoundingClientRect();
+    var visible = r.width > 1 && r.height > 1;
+    var options = popup.querySelectorAll('li[role="option"]');
+    if (visible && options.length > 0) {
+      return popup;
+    }
+    return null;
+  }
+
+  /** 折叠选区下删除光标前一字（优先 Range，否则 Backspace 事件） */
+  function deleteOneCharBackwardInPromptEditable(rootEl) {
+    if (!rootEl) return false;
+    try {
+      rootEl.focus();
+    } catch (eF) {
+      /* ignore */
+    }
+    var sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+      var r = sel.getRangeAt(0);
+      if (!r.collapsed) {
+        r.deleteContents();
+        try {
+          rootEl.dispatchEvent(new Event('input', { bubbles: true }));
+        } catch (eIn) {
+          /* ignore */
+        }
+        return true;
+      }
+      var n = r.startContainer;
+      var off = r.startOffset;
+      if (n.nodeType === Node.TEXT_NODE && off >= 1) {
+        r.setStart(n, off - 1);
+        r.setEnd(n, off);
+        r.deleteContents();
+        sel.removeAllRanges();
+        sel.addRange(r);
+        sel.collapseToStart();
+        try {
+          rootEl.dispatchEvent(new Event('input', { bubbles: true }));
+        } catch (eIn2) {
+          /* ignore */
+        }
+        return true;
+      }
+    }
+    var down = new KeyboardEvent('keydown', {
+      key: 'Backspace',
+      code: 'Backspace',
+      keyCode: 8,
+      which: 8,
+      bubbles: true,
+      cancelable: true,
+    });
+    var up = new KeyboardEvent('keyup', {
+      key: 'Backspace',
+      code: 'Backspace',
+      keyCode: 8,
+      which: 8,
+      bubbles: true,
+      cancelable: true,
+    });
+    rootEl.dispatchEvent(down);
+    rootEl.dispatchEvent(up);
+    try {
+      rootEl.dispatchEvent(new Event('input', { bubbles: true }));
+    } catch (eIn3) {
+      /* ignore */
+    }
+    return true;
+  }
+
+  /** 删掉当前 @ 再 insertText @，用于弹层卡住时重触发 */
+  async function retryJimengAtByDeleteAndReinsertAt(rootEl) {
+    if (!rootEl) return false;
+    deleteOneCharBackwardInPromptEditable(rootEl);
+    await delay(AT_POPUP_REINSERT_SETTLE_MS);
+    var insOk = false;
+    try {
+      insOk = doc.execCommand('insertText', false, '@');
+    } catch (eIns) {
+      /* ignore */
+    }
+    try {
+      rootEl.dispatchEvent(new Event('input', { bubbles: true }));
+    } catch (eIn) {
+      /* ignore */
+    }
+    return insOk;
+  }
+
+  /**
+   * 轮询直至 @ 下拉挂载且至少有一条 option。若连续 AT_POPUP_STUCK_SLICE_MS 仍无弹层，则删掉 @ 再插入 @（总时长 AT_POPUP_WAIT_MAX_MS）。
+   * @param {Element | null} targetForReinsert 提示词可编辑根节点
+   * @returns {Promise<{ ok: true, popup: Element } | { ok: false, code: string }>}
+   */
+  async function waitForJimengAtSelectPopupReady(roundId, stepKey, targetForReinsert) {
+    var deadline = Date.now() + AT_POPUP_WAIT_MAX_MS;
+    while (Date.now() < deadline) {
+      var sliceEnd = Date.now() + AT_POPUP_STUCK_SLICE_MS;
+      if (sliceEnd > deadline) sliceEnd = deadline;
+      while (Date.now() < sliceEnd) {
+        var popupOk = tryJimengAtSelectPopupReady();
+        if (popupOk) {
+          var nOpt = popupOk.querySelectorAll('li[role="option"]').length;
+          appendMainLog(roundId, stepKey, 'debug', 'Step15.debug.atPopupReady options=' + nOpt);
+          return { ok: true, popup: popupOk };
+        }
+        await delay(AT_POPUP_POLL_MS);
+      }
+      if (Date.now() >= deadline) break;
+      appendMainLog(roundId, stepKey, 'debug', 'Step15.debug.atPopupStuckReinsertAt');
+      var reinsertOk = await retryJimengAtByDeleteAndReinsertAt(targetForReinsert);
+      if (!reinsertOk) {
+        appendMainLog(roundId, stepKey, 'debug', 'Step15.debug.atPopupStuckReinsertAtInsertFailed');
+      }
+      await delay(AT_POPUP_REINSERT_SETTLE_MS);
+    }
+    appendMainLog(roundId, stepKey, 'info', 'Step15.动作失败+@ 下拉未在时限内加载完成');
+    return { ok: false, code: 'JIMENG_AT_POPUP_TIMEOUT' };
+  }
+
+  /**
+   * @param {Element} [rootPopup] 若已由上一步 wait 得到，避免多实例时 query 到错误弹层
+   */
+  async function clickJimengReferenceOption(imageNum, rootPopup) {
+    var popup = rootPopup || doc.querySelector('.lv-select-popup');
+    var options = popup ? popup.querySelectorAll('li[role="option"]') : [];
+    for (var oi = 0; oi < options.length; oi++) {
+      var li = options[oi];
+      var mm = (li.textContent || '').match(/图片(\d+)/);
+      if (mm && parseInt(mm[1], 10) === imageNum) {
+        await delay(100);
+        li.click();
+        return true;
+      }
+    }
+    return false;
+  }
 
   /** @param {{ roundId: string, images?: string[] }} payload */
   async function runStep13PasteReferenceClearPrompt(payload) {
@@ -1042,10 +1198,9 @@
       appendMainLog(roundId, stepKey, 'debug', 'Step15.debug.textareaSkipAt');
       return { ok: true };
     }
-    var maxIter = 120;
-    var iter = 0;
-    while (iter < maxIter) {
-      iter++;
+    var round = 0;
+    while (round < STEP15_MAX_PLACEHOLDER_ROUNDS) {
+      round++;
       var inner = target.innerText || target.textContent || '';
       var m = inner.match(/\(参考图片(\d+)\)/);
       if (!m) {
@@ -1054,7 +1209,8 @@
       var token = m[0];
       var n = parseInt(m[1], 10);
       if (!selectTextInElement(target, token)) {
-        return { ok: true };
+        appendMainLog(roundId, stepKey, 'info', 'Step15.动作失败+无法选中占位符');
+        return { ok: false, code: 'JIMENG_AT_PLACEHOLDER_SELECT_FAILED' };
       }
       var insAt = false;
       try {
@@ -1063,15 +1219,24 @@
         /* ignore */
       }
       if (!insAt) {
-        return { ok: true };
+        appendMainLog(roundId, stepKey, 'info', 'Step15.动作失败+无法插入@');
+        return { ok: false, code: 'JIMENG_AT_INSERT_FAILED' };
       }
       target.dispatchEvent(new Event('input', { bubbles: true }));
-      await delay(POPUP_WAIT_MS_AT);
-      var clicked = await clickJimengReferenceOption(n);
+      var wPop = await waitForJimengAtSelectPopupReady(roundId, stepKey, target);
+      if (!wPop.ok) {
+        return { ok: false, code: wPop.code };
+      }
+      var clicked = await clickJimengReferenceOption(n, wPop.popup);
       appendMainLog(roundId, stepKey, 'debug', 'Step15.debug.refOption n=' + n + ' ok=' + clicked);
+      if (!clicked) {
+        appendMainLog(roundId, stepKey, 'info', 'Step15.动作失败+下拉已加载但无图片' + n);
+        return { ok: false, code: 'JIMENG_AT_OPTION_NOT_FOUND' };
+      }
       await delay(AFTER_OPTION_MS_AT);
     }
-    return { ok: true };
+    appendMainLog(roundId, stepKey, 'info', 'Step15.动作失败+@ 展开超过最大轮次');
+    return { ok: false, code: 'JIMENG_AT_EXPAND_EXHAUSTED' };
   }
 
   /** @param {{ roundId: string }} payload */
@@ -1304,11 +1469,13 @@
     return null;
   }
 
+  /** 生成中：loading 视频 / 造梦进度 / 结果区 loading 容器（与「已完成」DOM 互斥，recover 不靠 img decode） */
   function isJimengRecordGenerating(root) {
     if (!root) return false;
     var t = root.textContent || '';
     if (t.indexOf('智能创意中') !== -1) return true;
     if (root.querySelector('video[src*="record-loading-animation"]')) return true;
+    if (root.querySelector('[class*="loading-container"]')) return true;
     return /\d+%\s*造梦中/.test(t);
   }
 
@@ -1320,11 +1487,55 @@
     return img.complete && img.naturalWidth > 0;
   }
 
-  /** 与 listJimengResultImagesOrdered 相同的结果区根（多图网格在 record-box-wrapper 内）。 */
+  /**
+   * 与 listJimengResultImagesOrdered 相同的结果区根。
+   * 列表项内可能出现多个 `record-box-wrapper`：首个常为占位/空壳。
+   * 评分 = max(APM 结果图 img 数, responsive-image-grid 内 image-card-wrapper 数)；取最高分盒子。
+   * 未激活 Tab 下 lazy 图可能尚无 src，靠 wrapper 计数仍能选中正确盒子；若均为 0 则退回整棵 root。
+   */
   function jimengResultImagesScopeElement(root) {
-    if (!root) return null;
-    var box = root.querySelector && root.querySelector('[class*="record-box-wrapper"]');
-    return box || root;
+    if (!root || !root.querySelectorAll) return null;
+    var boxes = root.querySelectorAll('[class*="record-box-wrapper"]');
+    var apmSel = 'img[data-apm-action="ai-generated-image-record-card"]';
+    var best = null;
+    var bestScore = -1;
+    var i;
+    var el;
+    var apmN;
+    var grid;
+    var wrapN;
+    var score;
+    for (i = 0; i < boxes.length; i++) {
+      el = boxes[i];
+      apmN = el.querySelectorAll(apmSel).length;
+      grid = el.querySelector('[class*="responsive-image-grid"]') || el;
+      wrapN = grid.querySelectorAll('[class*="image-card-wrapper"]').length;
+      score = Math.max(apmN, wrapN);
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    }
+    if (best && bestScore > 0) return best;
+    return root;
+  }
+
+  /** RECOVER 就绪用：不依赖 https/src 已加载，仅数槽位（APM 节点或结果区 image-card-wrapper）。 */
+  function countJimengStructuralResultSlots(root) {
+    var scope = jimengResultImagesScopeElement(root);
+    if (!scope || !scope.querySelectorAll) return 0;
+    var apmSel = 'img[data-apm-action="ai-generated-image-record-card"]';
+    var apmN = scope.querySelectorAll(apmSel).length;
+    var grid = scope.querySelector('[class*="responsive-image-grid"]') || scope;
+    var wrapN = grid.querySelectorAll('[class*="image-card-wrapper"]').length;
+    return Math.max(apmN, wrapN);
+  }
+
+  /** 生成完成后记录区常见「再次生成」，生成中通常不出现；作未激活页无图时的兜底。 */
+  function hasJimengRecordPostGenerateOperations(root) {
+    if (!root) return false;
+    var t = root.textContent || '';
+    return t.indexOf('再次生成') !== -1;
   }
 
   /**
@@ -1384,6 +1595,231 @@
         /* ignore */
       }
     }
+  }
+
+  /** recoverDomSnapshot 单条 JSON 长度上限，避免拖垮日志通道 */
+  var RECOVER_DOM_LOG_HTML_MAX = 1800;
+  /** 整条 recoverDomSnapshot JSON 上限；过小会截断尾部字段，控制台 [PicPuck] 预览也看不清 */
+  var RECOVER_DOM_LOG_JSON_MAX = 65536;
+  /**
+   * 记录外壳 innerHTML：分片写入多条 appendLog。上限仅防极端页面撑爆通道；
+   * `shellInnerHTMLLoggedComplete` / `shellInnerHTMLDroppedChars` 标明是否一字不漏。
+   */
+  var SHELL_INNER_HTML_MAX_TOTAL = 500000;
+  var SHELL_INNER_HTML_CHUNK = 4000;
+  var SHELL_INNER_HTML_MAX_PARTS = 130;
+
+  function truncateRecoverLogStr(s, max) {
+    var t = typeof s === 'string' ? s : String(s == null ? '' : s);
+    var m = max || 800;
+    if (t.length <= m) return t;
+    return t.slice(0, m) + '…[+' + (t.length - m) + 'chars]';
+  }
+
+  function summarizeImgNodesForRecoverLog(nodes, maxN) {
+    var out = [];
+    var lim = Math.min(nodes.length, maxN == null ? 8 : maxN);
+    var i;
+    for (i = 0; i < lim; i++) {
+      var el = nodes[i];
+      if (!el || el.tagName !== 'IMG') continue;
+      var src = (el.getAttribute && el.getAttribute('src')) || '';
+      out.push({
+        i: i,
+        complete: !!el.complete,
+        nw: el.naturalWidth,
+        nh: el.naturalHeight,
+        srcTail: truncateRecoverLogStr(src, 120),
+      });
+    }
+    if (nodes.length > lim) {
+      out.push({ note: '…+' + (nodes.length - lim) + ' more imgs' });
+    }
+    return out;
+  }
+
+  /**
+   * 精简：单行 info，无 JSON / 无 innerHTML 分片。`recoverDomVerbose` 未开时用此路径。
+   */
+  function logRecoverDomBrief(roundId, stepKey, reason, docRef, root, anchor, extra) {
+    var hidden = !!document.hidden;
+    var vis = typeof document.visibilityState === 'string' ? document.visibilityState : '';
+    var parts = ['reason=' + (reason || ''), 'hidden=' + (hidden ? '1' : '0'), 'vis=' + vis, 'root=' + (root ? '1' : '0')];
+    if (extra && typeof extra === 'object') {
+      if (extra.slotsCount != null) parts.push('slots=' + extra.slotsCount);
+      if (extra.validCount != null) parts.push('valid=' + extra.validCount);
+      if (extra.n != null) parts.push('n=' + extra.n);
+      if (extra.isGenerating) parts.push('generating=1');
+    }
+    appendMainLog(roundId, stepKey, 'info', 'Step04.info.recoverDomBrief ' + parts.join(' '));
+  }
+
+  /**
+   * RECOVER 判定瞬间的页面/DOM 快照（JSON）。仅 `payload.recoverDomVerbose===true` 时写入。
+   * 若已解析到记录 root：另含 `recoverDomShellPart` 分片与完整性 info。
+   */
+  function logRecoverDomSnapshot(verbose, roundId, stepKey, reason, docRef, root, anchor, extra) {
+    if (!verbose) {
+      logRecoverDomBrief(roundId, stepKey, reason, docRef, root, anchor, extra);
+      return;
+    }
+    var d = docRef || doc;
+    /** @type {{ inner: string, numChunks: number, chunkSize: number } | null} */
+    var shellPartsToLog = null;
+    var snap = {
+      v: 1,
+      reason: reason || '',
+      visibilityState: typeof document.visibilityState === 'string' ? document.visibilityState : '',
+      hidden: !!document.hidden,
+      href: truncateRecoverLogStr(String(location.href || ''), 280),
+    };
+    if (anchor && typeof anchor === 'object') {
+      snap.anchor = {
+        dataId: truncateRecoverLogStr(String(anchor.dataId || ''), 80),
+        recordItemId: truncateRecoverLogStr(String(anchor.recordItemId || ''), 80),
+        promptPreviewLen: typeof anchor.promptPreview === 'string' ? anchor.promptPreview.length : 0,
+      };
+    }
+    snap.rootFound = !!root;
+    if (anchor && typeof anchor === 'object' && typeof anchor.dataId === 'string' && anchor.dataId.trim()) {
+      try {
+        var cands = listJimengItemRootsByDataId(d, anchor.dataId.trim());
+        snap.dataIdVisibleRootsCount = cands ? cands.length : 0;
+      } catch (eC) {
+        snap.dataIdVisibleRootsCount = -1;
+      }
+    }
+    if (anchor && typeof anchor === 'object' && typeof anchor.recordItemId === 'string' && anchor.recordItemId.trim()) {
+      try {
+        var rid = anchor.recordItemId.trim();
+        var byId = d.getElementById(rid);
+        snap.recordItemIdElementExists = !!byId;
+        if (byId && byId.getBoundingClientRect) {
+          var br = byId.getBoundingClientRect();
+          snap.recordItemIdRect = { w: Math.round(br.width), h: Math.round(br.height) };
+        }
+      } catch (eR) {
+        snap.recordItemIdElementExists = false;
+      }
+    }
+    try {
+      snap.latestRecordFallbackExists = !!findLatestJimengGenerationRecordRoot(d);
+    } catch (eL) {
+      snap.latestRecordFallbackExists = false;
+    }
+    if (root && root.nodeType === 1) {
+      var rr = root.getBoundingClientRect();
+      var rawInner = root.innerHTML || '';
+      var fullInnerLen = rawInner.length;
+      var inner = rawInner;
+      var innerTrunc = false;
+      if (inner.length > SHELL_INNER_HTML_MAX_TOTAL) {
+        inner = inner.slice(0, SHELL_INNER_HTML_MAX_TOTAL);
+        innerTrunc = true;
+      }
+      var numChunks = inner.length === 0 ? 1 : Math.ceil(inner.length / SHELL_INNER_HTML_CHUNK);
+      if (numChunks > SHELL_INNER_HTML_MAX_PARTS) {
+        inner = inner.slice(0, SHELL_INNER_HTML_CHUNK * SHELL_INNER_HTML_MAX_PARTS);
+        innerTrunc = true;
+        numChunks = SHELL_INNER_HTML_MAX_PARTS;
+      }
+      shellPartsToLog = { inner: inner, numChunks: numChunks, chunkSize: SHELL_INNER_HTML_CHUNK };
+      var droppedInnerChars = fullInnerLen > inner.length ? fullInnerLen - inner.length : 0;
+      var shellLoggedComplete = !innerTrunc && inner.length === fullInnerLen;
+      snap.root = {
+        shellInnerHTMLLoggedComplete: shellLoggedComplete,
+        shellInnerHTMLDroppedChars: shellLoggedComplete ? 0 : droppedInnerChars,
+        shellInnerHTMLLen: fullInnerLen,
+        shellInnerHTMLLoggedChars: inner.length,
+        shellInnerHTMLParts: numChunks,
+        shellInnerHTMLTruncated: innerTrunc,
+        tag: root.tagName,
+        id: truncateRecoverLogStr(root.id || '', 100),
+        className: truncateRecoverLogStr(String(root.className || ''), 220),
+        outerHTML: truncateRecoverLogStr(root.outerHTML || '', RECOVER_DOM_LOG_HTML_MAX),
+        rect: { x: Math.round(rr.x), y: Math.round(rr.y), w: Math.round(rr.width), h: Math.round(rr.height) },
+        textSnippet: truncateRecoverLogStr((root.textContent || '').replace(/\s+/g, ' '), 400),
+      };
+    }
+    if (extra && typeof extra === 'object') {
+      var k;
+      for (k in extra) {
+        if (Object.prototype.hasOwnProperty.call(extra, k)) {
+          snap[k] = extra[k];
+        }
+      }
+    }
+    var json;
+    try {
+      json = JSON.stringify(snap);
+    } catch (eJ) {
+      json = '{"recoverDomSnapshotError":"JSON.stringify failed"}';
+    }
+    if (json.length > RECOVER_DOM_LOG_JSON_MAX) {
+      json = json.slice(0, RECOVER_DOM_LOG_JSON_MAX) + '…[json truncated]';
+    }
+    appendMainLog(roundId, stepKey, 'debug', 'Step04.debug.recoverDomSnapshot ' + json);
+    if (root && root.nodeType === 1 && snap.root && typeof snap.root.shellInnerHTMLLoggedComplete === 'boolean') {
+      appendMainLog(
+        roundId,
+        stepKey,
+        'info',
+        'Step04.info.recoverDomShellIntegrity shellFull=' +
+          (snap.root.shellInnerHTMLLoggedComplete ? '1' : '0') +
+          ' dropped=' +
+          snap.root.shellInnerHTMLDroppedChars +
+          ' innerLen=' +
+          snap.root.shellInnerHTMLLen +
+          ' parts=' +
+          snap.root.shellInnerHTMLParts,
+      );
+    }
+    if (shellPartsToLog) {
+      var ci;
+      for (ci = 0; ci < shellPartsToLog.numChunks; ci++) {
+        var start = ci * shellPartsToLog.chunkSize;
+        var chunk = shellPartsToLog.inner.slice(start, start + shellPartsToLog.chunkSize);
+        appendMainLog(
+          roundId,
+          stepKey,
+          'debug',
+          'Step04.debug.recoverDomShellPart ' + (ci + 1) + '/' + shellPartsToLog.numChunks + ' ' + chunk,
+        );
+      }
+    }
+    var sumParts = ['reason=' + (reason || '')];
+    sumParts.push('hidden=' + (snap.hidden ? '1' : '0'));
+    sumParts.push('vis=' + (snap.visibilityState || ''));
+    sumParts.push('root=' + (snap.rootFound ? '1' : '0'));
+    if (snap.dataIdVisibleRootsCount != null) {
+      sumParts.push('dataIdRoots=' + snap.dataIdVisibleRootsCount);
+    }
+    if (snap.recordItemIdElementExists === false) {
+      sumParts.push('ridEl=0');
+    }
+    if (snap.slotsCount != null) {
+      sumParts.push('slots=' + snap.slotsCount);
+    }
+    if (snap.validCount != null) {
+      sumParts.push('valid=' + snap.validCount);
+    }
+    if (snap.isGenerating) {
+      sumParts.push('generating=1');
+    }
+    if (snap.n != null) {
+      sumParts.push('n=' + snap.n);
+    }
+    if (shellPartsToLog) {
+      sumParts.push('shellParts=' + shellPartsToLog.numChunks);
+      sumParts.push('shellChars=' + shellPartsToLog.inner.length);
+      if (snap.root && typeof snap.root.shellInnerHTMLLoggedComplete === 'boolean') {
+        sumParts.push('shellFull=' + (snap.root.shellInnerHTMLLoggedComplete ? '1' : '0'));
+      }
+      if (snap.root && snap.root.shellInnerHTMLDroppedChars > 0) {
+        sumParts.push('shellDrop=' + snap.root.shellInnerHTMLDroppedChars);
+      }
+    }
+    appendMainLog(roundId, stepKey, 'info', 'Step04.info.recoverDomSummary ' + sumParts.join(' '));
   }
 
   /** 即梦结果卡：data-apm-action 在内部 img 上，不能对 role=button 用 closest(该选择器)。菜单入口常在 class 含 context-menu-trigger 的层上。 */
@@ -2191,8 +2627,57 @@
     return { ok: true, images: collected };
   }
 
+  /** RECOVER：在页内轮询直至结果区可观测（结构槽位 / https 槽位 / 完成态文案）或超时，避免 SW 一进来就读空 DOM。 */
+  var RECOVER_DOM_READY_TIMEOUT_MS = 45000;
+  var RECOVER_DOM_READY_POLL_MS = 400;
+  var RECOVER_DOM_READY_LOG_EVERY_MS = 8000;
+
   /**
-   * 异步第二阶段单次轮询：按锚点定位记录；仍在生成/图未齐则 not_ready；就绪则复用 Step21 收集。
+   * @param {string} roundId
+   * @param {string} stepKey
+   * @param {{ dataId?: string, recordItemId?: string, promptPreview?: string }} anchor
+   * @returns {Promise<Element|null>}
+   */
+  async function awaitJimengRecoverDomReadyForObservation(roundId, stepKey, anchor) {
+    var deadline = Date.now() + RECOVER_DOM_READY_TIMEOUT_MS;
+    var lastRoot = null;
+    var lastLogAt = 0;
+    while (Date.now() < deadline) {
+      var root = resolveJimengRecordRoot(doc, anchor);
+      lastRoot = root;
+      if (!root) {
+        await delay(RECOVER_DOM_READY_POLL_MS);
+        continue;
+      }
+      if (isJimengRecordGenerating(root)) {
+        await delay(RECOVER_DOM_READY_POLL_MS);
+        continue;
+      }
+      var st = countJimengStructuralResultSlots(root);
+      var httpsN = listJimengResultCardSlotElements(root).length;
+      if (st >= 1 || httpsN >= 1 || hasJimengRecordPostGenerateOperations(root)) {
+        appendMainLog(
+          roundId,
+          stepKey,
+          'debug',
+          'Step04.debug.recoverDomReady structural=' + st + ' httpsSlots=' + httpsN,
+        );
+        return root;
+      }
+      var now = Date.now();
+      if (now - lastLogAt >= RECOVER_DOM_READY_LOG_EVERY_MS) {
+        lastLogAt = now;
+        appendMainLog(roundId, stepKey, 'info', 'Step04.info.等待结果区挂载或生成结束');
+      }
+      await delay(RECOVER_DOM_READY_POLL_MS);
+    }
+    appendMainLog(roundId, stepKey, 'info', 'Step04.info.等待结果DOM超时+按当前DOM继续检查');
+    return lastRoot;
+  }
+
+  /**
+   * 异步第二阶段单次轮询：按锚点定位记录；仍在生成则 not_ready。
+   * 就绪判定不依赖图片已加载（未激活 Tab 下 lazy 可无 src），用结构槽位与「再次生成」等完成态；取图仍由 Step21 在页内等待 decode。
    * @param {{ roundId?: string, jimengRecordAnchor?: { dataId?: string, recordItemId?: string, promptPreview?: string } }} payload
    * @returns {Promise<{ ok: boolean, code?: string, outcome?: 'not_ready'|'ready', images?: Array<{ imageBase64: string, contentType?: string }> }>}
    */
@@ -2200,6 +2685,7 @@
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var anchor = payload && payload.jimengRecordAnchor;
     var stepKey = 'step04_jimeng_recover_fetch';
+    var recoverDomVerbose = !!(payload && payload.recoverDomVerbose);
     if (!anchor || typeof anchor !== 'object') {
       return { ok: false, code: 'JIMENG_RECOVER_NO_ANCHOR' };
     }
@@ -2208,27 +2694,140 @@
     if (!did && !rid) {
       return { ok: false, code: 'JIMENG_RECOVER_NO_ANCHOR' };
     }
-    var root = resolveJimengRecordRoot(doc, anchor);
+    // #region agent log
+    picpuckDbgIngest('H0', 'jimengImageMainWorld.js:recover:entry', 'runJimengRecoverPipeline', {
+      hasDataId: !!did,
+      hasRecordItemId: !!rid,
+      promptPreviewLen: anchor.promptPreview ? String(anchor.promptPreview).length : 0,
+    });
+    // #endregion
+    var root = await awaitJimengRecoverDomReadyForObservation(roundId, stepKey, anchor);
+    var dbgItemByDid = 0;
+    var dbgIdElVisible = false;
+    if (did) {
+      try {
+        var escDbg = String(did).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        dbgItemByDid = doc.querySelectorAll('div[class*="item-"][data-id="' + escDbg + '"]').length;
+      } catch (eDbg) {
+        dbgItemByDid = -1;
+      }
+    }
+    if (rid) {
+      try {
+        var elById = doc.getElementById(rid);
+        dbgIdElVisible = !!(elById && isJimengRecordRootVisible(elById));
+      } catch (eId) {
+        dbgIdElVisible = false;
+      }
+    }
+    var docApmTotal = 0;
+    var rootApmTotal = 0;
+    try {
+      docApmTotal = doc.querySelectorAll('img[data-apm-action="ai-generated-image-record-card"]').length;
+    } catch (eApmDoc) {
+      docApmTotal = -1;
+    }
+    if (root) {
+      try {
+        rootApmTotal = root.querySelectorAll('img[data-apm-action="ai-generated-image-record-card"]').length;
+      } catch (eApmRoot) {
+        rootApmTotal = -1;
+      }
+    }
+    // #region agent log
+    picpuckDbgIngest('H1-H3', 'jimengImageMainWorld.js:recover:afterResolve', 'resolveJimengRecordRoot', {
+      rootFound: !!root,
+      dbgItemByDid: dbgItemByDid,
+      dbgIdElVisible: dbgIdElVisible,
+      docApmTotal: docApmTotal,
+      rootApmTotal: rootApmTotal,
+    });
+    // #endregion
     if (!root) {
+      logRecoverDomSnapshot(recoverDomVerbose, roundId, stepKey, 'no_root', doc, null, anchor, {});
       appendMainLog(roundId, stepKey, 'info', 'Step04.即梦记录未出现在DOM');
       return { ok: true, outcome: 'not_ready' };
     }
     if (isJimengRecordGenerating(root)) {
+      // #region agent log
+      var tGen = root.textContent || '';
+      picpuckDbgIngest('H2', 'jimengImageMainWorld.js:recover:generating', 'isJimengRecordGenerating true', {
+        hasLoadingContainer: !!root.querySelector('[class*="loading-container"]'),
+        hasLoadingVideo: !!root.querySelector('video[src*="record-loading-animation"]'),
+        text_has_智能创意中: tGen.indexOf('智能创意中') !== -1,
+        text_has_pct_造梦中: /\d+%\s*造梦中/.test(tGen),
+      });
+      // #endregion
+      logRecoverDomSnapshot(recoverDomVerbose, roundId, stepKey, 'still_generating', doc, root, anchor, { isGenerating: true });
       appendMainLog(roundId, stepKey, 'info', 'Step04.即梦仍在生成中');
       return { ok: true, outcome: 'not_ready' };
     }
-    var slots = listJimengResultCardSlotElements(root);
-    nudgeJimengLazyResultCardsIntoView(root, slots);
-    var valid = listJimengResultImagesOrdered(root);
-    if (slots.length >= 1 && valid.length < slots.length) {
-      appendMainLog(roundId, stepKey, 'debug', 'Step04.debug.recoverLazy valid=' + valid.length + ' slots=' + slots.length);
-      return { ok: true, outcome: 'not_ready' };
+    var scopeEl = jimengResultImagesScopeElement(root);
+    var apmForNudge = [];
+    if (scopeEl) {
+      var apmQ = scopeEl.querySelectorAll('img[data-apm-action="ai-generated-image-record-card"]');
+      var zi;
+      for (zi = 0; zi < apmQ.length; zi++) apmForNudge.push(apmQ[zi]);
     }
-    var n = slots.length >= 1 ? slots.length : valid.length;
+    var slotsHttps = listJimengResultCardSlotElements(root);
+    nudgeJimengLazyResultCardsIntoView(root, apmForNudge.length ? apmForNudge : slotsHttps);
+    /** recover 就绪：不依赖图片已加载（未激活 Tab lazy 无 https）；用结构槽位数 + 完成态文案兜底 */
+    var structuralN = countJimengStructuralResultSlots(root);
+    var n = Math.max(structuralN, slotsHttps.length);
+    if (n < 1 && hasJimengRecordPostGenerateOperations(root)) {
+      n = 1;
+    }
+    var validDecoded = listJimengResultImagesOrdered(root);
     if (n < 1) {
-      appendMainLog(roundId, stepKey, 'info', 'Step04.即梦记录上尚无可用结果图');
+      var scopeApmCount = scopeEl ? scopeEl.querySelectorAll('img[data-apm-action="ai-generated-image-record-card"]').length : 0;
+      // #region agent log
+      picpuckDbgIngest('H4', 'jimengImageMainWorld.js:recover:noSlots', 'no result slots', {
+        slotsHttpsCount: slotsHttps.length,
+        structuralN: structuralN,
+        validDecodedCount: validDecoded.length,
+        hasRecordBox: !!root.querySelector('[class*="record-box-wrapper"]'),
+        hasPostGenOps: hasJimengRecordPostGenerateOperations(root),
+        docApmTotal: docApmTotal,
+        rootApmTotal: rootApmTotal,
+        scopeApmCount: scopeApmCount,
+      });
+      // #endregion
+      logRecoverDomSnapshot(recoverDomVerbose, roundId, stepKey, 'no_result_slots', doc, root, anchor, {
+        slotsCount: slotsHttps.length,
+        validCount: validDecoded.length,
+        slotImgs: summarizeImgNodesForRecoverLog(slotsHttps),
+        validImgs: summarizeImgNodesForRecoverLog(validDecoded),
+      });
+      appendMainLog(roundId, stepKey, 'info', 'Step04.即梦记录上尚无结果槽位或未完成');
       return { ok: true, outcome: 'not_ready' };
     }
+    /** 后台 Tab：结构槽/卡片位可齐，但 lazy 无 https、decode 为 0；Step21 右键收集依赖已解码图，硬跑必 JIMENG_GENERATE_NO_OUTPUT */
+    if (n >= 1 && validDecoded.length < 1 && document.hidden) {
+      appendMainLog(
+        roundId,
+        stepKey,
+        'info',
+        'Step04.info.后台Tab无已解码结果图+Step21暂不执行+延后取回 structuralN=' +
+          structuralN +
+          ' httpsSlots=' +
+          slotsHttps.length,
+      );
+      logRecoverDomBrief(roundId, stepKey, 'hidden_tab_no_decoded_for_step21', doc, root, anchor, {
+        slotsCount: slotsHttps.length,
+        validCount: validDecoded.length,
+        structuralN: structuralN,
+        n: n,
+      });
+      return { ok: true, outcome: 'not_ready' };
+    }
+    logRecoverDomSnapshot(recoverDomVerbose, roundId, stepKey, 'before_step21_collect', doc, root, anchor, {
+      slotsCount: slotsHttps.length,
+      validCount: validDecoded.length,
+      structuralN: structuralN,
+      n: n,
+      slotImgs: summarizeImgNodesForRecoverLog(slotsHttps),
+      validImgs: summarizeImgNodesForRecoverLog(validDecoded),
+    });
     var collectPayload = {
       roundId: roundId,
       n: n,
@@ -2237,9 +2836,221 @@
     };
     var colRes = await runStep21CollectImagesViaContextMenu(collectPayload);
     if (!colRes || colRes.ok !== true) {
+      // #region agent log
+      picpuckDbgIngest('H5', 'jimengImageMainWorld.js:recover:collectFail', 'step21 collect failed', {
+        ok: !!(colRes && colRes.ok),
+        code: colRes && colRes.code ? String(colRes.code) : '',
+      });
+      // #endregion
       return colRes;
     }
+    // #region agent log
+    picpuckDbgIngest('H5', 'jimengImageMainWorld.js:recover:ready', 'recover ready', {
+      imageCount: colRes.images ? colRes.images.length : 0,
+    });
+    // #endregion
     return { ok: true, outcome: 'ready', images: colRes.images };
+  }
+
+  /** 页内 watcher：控制台打印当前观测 scope 片段；与 runJimengRecoverPipeline 就绪判定一致（结构槽 / https 槽 / 再次生成） */
+  var WATCH_SCOPE_HTML_MAX = 6000;
+  var WATCH_MAX_TICKS_NO_FORGE = 36;
+
+  function buildJimengRecoverWatcherSnapshot(anchor) {
+    var root = resolveJimengRecordRoot(doc, anchor);
+    var docApmTotal = 0;
+    try {
+      docApmTotal = doc.querySelectorAll('img[data-apm-action="ai-generated-image-record-card"]').length;
+    } catch (eApm) {
+      docApmTotal = -1;
+    }
+    var out = {
+      ts: Date.now(),
+      rootFound: !!root,
+      generating: false,
+      structuralN: 0,
+      httpsSlots: 0,
+      n: 0,
+      ready: false,
+      docApmTotal: docApmTotal,
+      rootApmTotal: 0,
+      scopeTag: '',
+      scopeClassTail: '',
+      scopeHtmlSnip: '',
+      hidden: !!document.hidden,
+      visibilityState: typeof document.visibilityState === 'string' ? document.visibilityState : '',
+    };
+    if (!root) return out;
+    try {
+      out.rootApmTotal = root.querySelectorAll('img[data-apm-action="ai-generated-image-record-card"]').length;
+    } catch (eR) {
+      out.rootApmTotal = -1;
+    }
+    if (isJimengRecordGenerating(root)) {
+      out.generating = true;
+      return out;
+    }
+    var structuralN = countJimengStructuralResultSlots(root);
+    var slotsHttps = listJimengResultCardSlotElements(root);
+    var httpsN = slotsHttps.length;
+    var n = Math.max(structuralN, httpsN);
+    if (n < 1 && hasJimengRecordPostGenerateOperations(root)) n = 1;
+    out.structuralN = structuralN;
+    out.httpsSlots = httpsN;
+    out.n = n;
+    out.ready = n >= 1;
+    var scopeEl = jimengResultImagesScopeElement(root);
+    if (scopeEl) {
+      out.scopeTag = scopeEl.tagName || '';
+      var cn = scopeEl.className && String(scopeEl.className);
+      out.scopeClassTail = cn ? truncateRecoverLogStr(cn, 200) : '';
+      var html = scopeEl.outerHTML || '';
+      out.scopeHtmlSnip = truncateRecoverLogStr(html, WATCH_SCOPE_HTML_MAX);
+    }
+    return out;
+  }
+
+  /**
+   * LAUNCH 结束后工作 Tab 已无 log sink，LOG_APPEND 会被 SW 丢弃；经 CS 转发供 Service Worker console 观测（后台 Tab 无需开 DevTools）。
+   */
+  function postJimengWatcherTelemetryToSw(snap) {
+    try {
+      var slim = {
+        tick: snap.tick,
+        async_job_id: snap.async_job_id,
+        roundId: snap.roundId || '',
+        ready: !!snap.ready,
+        n: snap.n,
+        rootFound: !!snap.rootFound,
+        generating: !!snap.generating,
+        structuralN: snap.structuralN,
+        httpsSlots: snap.httpsSlots,
+        docApmTotal: snap.docApmTotal,
+        rootApmTotal: snap.rootApmTotal,
+        hidden: !!snap.hidden,
+        visibilityState: snap.visibilityState || '',
+        scopeTag: snap.scopeTag || '',
+        scopeClassTail: snap.scopeClassTail || '',
+        scopeHtmlPreview: truncateRecoverLogStr(snap.scopeHtmlSnip || '', 480),
+      };
+      window.postMessage(
+        { picpuckBridge: true, kind: 'JIMENG_WATCHER_TELEMETRY', telemetry: slim },
+        location.origin,
+      );
+    } catch (eT) {
+      /* ignore */
+    }
+  }
+
+  /**
+   * document load 完成后等待 1s 首次检测；未就绪则每 5s 再测。就绪后 postMessage → 扩展触发 RECOVER。
+   * @param {{ roundId?: string, async_job_id?: string, forgeCallerTabId?: number, recoverPayload?: Record<string, unknown> }} packed
+   */
+  function startJimengRecoverPageWatcher(packed) {
+    var prevStop = g.__picpuckJimengRecoverWatcherStop;
+    if (typeof prevStop === 'function') {
+      try {
+        prevStop();
+      } catch (ePrev) {}
+    }
+    var stopped = false;
+    g.__picpuckJimengRecoverWatcherStop = function () {
+      stopped = true;
+    };
+    var rp = packed && packed.recoverPayload;
+    var anchor = rp && rp.jimengRecordAnchor;
+    var roundId = packed && packed.roundId ? String(packed.roundId) : '';
+    var asyncJob = packed && packed.async_job_id ? String(packed.async_job_id) : '';
+    var forgeTab = packed && typeof packed.forgeCallerTabId === 'number' ? packed.forgeCallerTabId : 0;
+
+    (async function watcherMain() {
+      async function waitDomSettledPlus1s() {
+        if (document.readyState !== 'complete') {
+          await new Promise(function (resolve) {
+            window.addEventListener('load', resolve, { once: true });
+          });
+        }
+        await delay(1000);
+      }
+
+      await waitDomSettledPlus1s();
+
+      var tick = 0;
+      while (!stopped) {
+        tick += 1;
+        var snap = buildJimengRecoverWatcherSnapshot(anchor);
+        snap.tick = tick;
+        snap.async_job_id = asyncJob;
+        snap.roundId = roundId;
+        postJimengWatcherTelemetryToSw(snap);
+        try {
+          console.log('[PicPuck][JimengRecoverWatch]', JSON.stringify(snap));
+        } catch (eStr) {}
+        // #region agent log
+        picpuckDbgIngest('W1', 'jimengImageMainWorld.js:pageWatcher:tick', 'JimengRecoverWatch tick', snap);
+        // #endregion
+        appendMainLog(
+          roundId,
+          'system',
+          'debug',
+          'JimengRecoverWatch.tick=' +
+            tick +
+            ' ready=' +
+            (snap.ready ? '1' : '0') +
+            ' n=' +
+            snap.n +
+            ' root=' +
+            (snap.rootFound ? '1' : '0') +
+            ' gen=' +
+            (snap.generating ? '1' : '0'),
+        );
+
+        if (stopped) break;
+
+        if (snap.ready && forgeTab > 0) {
+          var rootNow = resolveJimengRecordRoot(doc, anchor);
+          var freshAnchor = rootNow ? extractJimengRecordAnchorFromRoot(rootNow) : null;
+          var basePayload = rp && typeof rp === 'object' ? rp : {};
+          var mergedPayload = {};
+          var k;
+          for (k in basePayload) {
+            if (Object.prototype.hasOwnProperty.call(basePayload, k)) {
+              mergedPayload[k] = basePayload[k];
+            }
+          }
+          if (freshAnchor && typeof freshAnchor === 'object') {
+            mergedPayload.jimengRecordAnchor = freshAnchor;
+          }
+          try {
+            window.postMessage(
+              {
+                picpuckBridge: true,
+                kind: 'JIMENG_PAGE_RECOVER_READY',
+                forgeCallerTabId: forgeTab,
+                recoverPayload: mergedPayload,
+              },
+              location.origin,
+            );
+          } catch (ePm) {}
+          appendMainLog(roundId, 'system', 'info', 'JimengRecoverWatch.firedRecover async_job_id=' + asyncJob);
+          stopped = true;
+          break;
+        }
+
+        if (forgeTab <= 0 && tick >= WATCH_MAX_TICKS_NO_FORGE) {
+          appendMainLog(
+            roundId,
+            'system',
+            'info',
+            'JimengRecoverWatch.stopped_no_forgeCallerTabId ticks=' + tick,
+          );
+          stopped = true;
+          break;
+        }
+
+        await delay(5000);
+      }
+    })();
   }
 
   g.__picpuckJimengImage = {
@@ -2260,5 +3071,6 @@
     runJimengCountNewestRecordImages: runJimengCountNewestRecordImages,
     runStep21CollectImagesViaContextMenu: runStep21CollectImagesViaContextMenu,
     runJimengRecoverPipeline: runJimengRecoverPipeline,
+    startJimengRecoverPageWatcher: startJimengRecoverPageWatcher,
   };
 })();

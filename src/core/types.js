@@ -6,7 +6,7 @@
  * @property {string} homeUrl 站点 URL 前缀，用于筛选「属于本站」的 Tab；同一站点可有多种 Task（§9.1）
  * @property {string} taskBaseUrl 本指令在无可用 Tab 时 `tabs.create` 打开的起始 URL，须以 homeUrl 为前缀（§9.1）
  * @property {Function[]} steps 仅业务步骤；step01～step03 由 dispatchRound 框架固定执行（§3.1）
- * @property {boolean} [recoverAllocateSilentDefault] 为 true 时：异步找回「检查」阶段默认静默分配 Tab（新建 `active:false`、复用不抢焦点）；用户可将 `picpuckRecoverCheckFocusTab` 置 true 以在检查阶段也激活工作 Tab。「取回」就绪后由业务步骤显式 `focusWorkTab`。
+ * @property {boolean} [recoverAllocateSilentDefault] 为 true 时：异步找回「检查」默认静默；`chrome.storage.sync.picpuckRecoverCheckFocusTab===true` 时检查阶段激活工作 Tab。「取回」就绪后由业务步骤显式 `focusWorkTab`。
  */
 
 /**

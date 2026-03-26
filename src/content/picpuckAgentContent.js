@@ -708,7 +708,15 @@
   });
 
   window.addEventListener('message', (event) => {
-    if (event.source !== window) return;
+    // MAIN 世界与隔离世界 window 非同一引用，event.source === window 常为 false，消息会被误丢。
+    // 同源 + picpuckBridge 结构即可桥接（后台 Tab 同样生效；与是否激活无关）。
+    let originOk = false;
+    try {
+      originOk = typeof event.origin === 'string' && event.origin === window.location.origin;
+    } catch {
+      originOk = false;
+    }
+    if (!originOk) return;
     const d = event.data;
     // MAIN 世界无 chrome.*，由页面 postMessage 经此桥到 SW
     if (d && d.picpuckBridge === true && d.kind === 'LOG_APPEND' && d.entry) {
@@ -777,7 +785,13 @@
       const relayGen =
         d.generationEvent && typeof d.generationEvent === 'object' ? d.generationEvent : null;
       geminiClipboardBufferListener = function onGeminiFullImageBuffer(event) {
-        if (event.source !== window) return;
+        let oOk = false;
+        try {
+          oOk = typeof event.origin === 'string' && event.origin === window.location.origin;
+        } catch {
+          oOk = false;
+        }
+        if (!oOk) return;
         const p = event.data;
         if (!p || p.picpuckBridge !== true || p.kind !== 'GEMINI_FULL_IMAGE_BUFFER') return;
         window.removeEventListener('message', geminiClipboardBufferListener);
@@ -829,6 +843,35 @@
     }
     if (d && d.picpuckBridge === true && d.kind === 'GEMINI_FULL_IMAGE_CLIPBOARD_ABORT') {
       removeGeminiClipboardBufferListener();
+      return;
+    }
+    if (d && d.picpuckBridge === true && d.kind === 'JIMENG_WATCHER_TELEMETRY' && d.telemetry) {
+      safeRuntimeSendMessage(
+        {
+          type: PICPUCK_COMMAND,
+          payload: {
+            type: PAGE_CMD,
+            action: '__picpuckJimengWatcherTelemetry',
+            telemetry: d.telemetry,
+          },
+        },
+        () => {},
+      );
+      return;
+    }
+    if (d && d.picpuckBridge === true && d.kind === 'JIMENG_PAGE_RECOVER_READY') {
+      safeRuntimeSendMessage(
+        {
+          type: PICPUCK_COMMAND,
+          payload: {
+            type: PAGE_CMD,
+            action: '__picpuckJimengPageRecoverReady',
+            forgeCallerTabId: d.forgeCallerTabId,
+            recoverPayload: d.recoverPayload,
+          },
+        },
+        () => {},
+      );
       return;
     }
     if (d && d.type === PAGE_CMD && d.action === 'picpuckAsyncGeneration') {

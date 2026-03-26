@@ -1,7 +1,7 @@
 /**
  * §9.4 allocateTab(command)：每次请求全量 `tabs.query`（§9.2）→ 按站点 `homeUrl` 前缀筛候选 → **再**筛 PicPuck 蓝组内 Tab（见 `picpuckWorkspaceTabGroup`）→
  * 按 tab.id 升序尝试 §9.3 原子抢占；无 idle 则 `tabs.create` 并入 PicPuck 组后再 `waitForTabUrlPrefix` 与抢占。
- * `CommandRecord.recoverAllocateSilentDefault` 为 true 时：默认不激活工作 Tab（`tabs.create` 用 `active:false`）；`chrome.storage.sync.picpuckRecoverCheckFocusTab===true` 时恢复检查阶段即激活。
+ * `CommandRecord.recoverAllocateSilentDefault` 为 true 时：由 `getRecoverCheckFocusWorkTab()` 决定；未设或 `false` 则静默；`picpuckRecoverCheckFocusTab===true` 时检查阶段激活工作 Tab。
  */
 import { getCommandRecord } from './registry.js';
 import { injectableAcquireExecSlot } from './execSlot/injectableAcquireExecSlot.js';
@@ -29,7 +29,7 @@ export async function allocateTab(command) {
     return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'invalid CommandRecord urls' };
   }
 
-  /** 异步找回检查阶段：默认静默；`picpuckRecoverCheckFocusTab===true` 时与旧行为一致（分配即激活） */
+  /** 异步找回 allocate 阶段：默认静默，由 `getRecoverCheckFocusWorkTab`（sync `picpuckRecoverCheckFocusTab`）决定是否激活；未设 false。Step04 内另有一次 focus 保证 recover 前 DOM 挂载。 */
   let focusAfterAllocate = true;
   if (rec.recoverAllocateSilentDefault === true) {
     focusAfterAllocate = await getRecoverCheckFocusWorkTab();

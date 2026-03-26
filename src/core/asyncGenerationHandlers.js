@@ -9,7 +9,7 @@ import {
 } from './asyncGenerationState.js';
 import { PICPUCK_ASYNC_GEN_PAGE, PICPUCK_ASYNC_GEN_RECOVER_RECEIVED } from './runtimeMessages.js';
 import { dispatchAsyncGenerationFillOnly, dispatchAsyncGenerationLaunch } from './asyncLaunchDispatch.js';
-import { dispatchAsyncGenerationRecover } from './asyncRecoverDispatch.js';
+import { onManualProbeRequest, unregisterWatchLoop } from './asyncWatchLoopRegistry.js';
 
 const ASYNC_ID_RE = /^[a-z0-9]{12}$/;
 
@@ -161,6 +161,85 @@ export async function handlePicpuckAsyncGeneration(payload, sender) {
       typeof payload.async_job_id === 'string' ? payload.async_job_id.trim().toLowerCase() : '';
     if (!ASYNC_ID_RE.test(async_job_id)) return { ok: false, error: 'async_job_id 无效' };
     markAsyncJobCancelled(async_job_id);
+    unregisterWatchLoop(async_job_id);
+    return { ok: true, asyncGenHandled: true };
+  }
+  if (phase === 'WATCH_PROBE') {
+    const async_job_id =
+      typeof payload.async_job_id === 'string' ? payload.async_job_id.trim().toLowerCase() : '';
+    // #region agent log
+    fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd9d244' },
+      body: JSON.stringify({
+        sessionId: 'd9d244',
+        location: 'asyncGenerationHandlers.js:WATCH_PROBE:entry',
+        message: 'WATCH_PROBE received',
+        data: { async_job_id, tabId },
+        timestamp: Date.now(),
+        hypothesisId: 'D',
+      }),
+    }).catch(() => {});
+    // #endregion
+    if (!ASYNC_ID_RE.test(async_job_id)) {
+      console.warn('[PicPuck] 检查进度 拒绝', { reason: 'async_job_id 无效', async_job_id });
+      return { ok: false, error: 'async_job_id 无效' };
+    }
+    const recoverPayload = payload.recoverPayload;
+    if (!recoverPayload || typeof recoverPayload !== 'object') {
+      console.warn('[PicPuck] 检查进度 拒绝', { reason: '缺少 recoverPayload', async_job_id });
+      return { ok: false, error: '缺少 recoverPayload' };
+    }
+    const err = validateJimengRecoverFields({ ...recoverPayload, async_job_id });
+    if (err) {
+      // #region agent log
+      fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd9d244' },
+        body: JSON.stringify({
+          sessionId: 'd9d244',
+          location: 'asyncGenerationHandlers.js:WATCH_PROBE:validateFail',
+          message: String(err),
+          data: { async_job_id },
+          timestamp: Date.now(),
+          hypothesisId: 'D',
+        }),
+      }).catch(() => {});
+      // #endregion
+      console.warn('[PicPuck] 检查进度 拒绝', { async_job_id, error: err });
+      return { ok: false, error: err };
+    }
+    const client_probe_id =
+      typeof payload.client_probe_id === 'string' && payload.client_probe_id.trim()
+        ? payload.client_probe_id.trim()
+        : undefined;
+    console.info('[PicPuck] 检查进度 已受理（将异步跑 JIMENG_ASYNC_RECOVER）', {
+      async_job_id,
+      client_probe_id,
+      callerTabId: tabId,
+    });
+    onManualProbeRequest({
+      async_job_id,
+      recoverPayload: { ...recoverPayload, async_job_id },
+      callerTabId: tabId,
+    });
+    // #region agent log
+    fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd9d244' },
+      body: JSON.stringify({
+        sessionId: 'd9d244',
+        location: 'asyncGenerationHandlers.js:WATCH_PROBE:accepted',
+        message: 'onManualProbeRequest queued',
+        data: {
+          async_job_id,
+          hasAnchor: !!(recoverPayload.jimengRecordAnchor && typeof recoverPayload.jimengRecordAnchor === 'object'),
+        },
+        timestamp: Date.now(),
+        hypothesisId: 'D',
+      }),
+    }).catch(() => {});
+    // #endregion
     return { ok: true, asyncGenHandled: true };
   }
   if (phase === 'RECOVER') {
@@ -178,8 +257,10 @@ export async function handlePicpuckAsyncGeneration(payload, sender) {
       type: PICPUCK_ASYNC_GEN_RECOVER_RECEIVED,
       async_job_id,
     });
-    void dispatchAsyncGenerationRecover(tabId, merged).catch((e) => {
-      console.error('[PicPuck] dispatchAsyncGenerationRecover', e);
+    onManualProbeRequest({
+      async_job_id,
+      recoverPayload: merged,
+      callerTabId: tabId,
     });
     return { ok: true, asyncGenHandled: true };
   }

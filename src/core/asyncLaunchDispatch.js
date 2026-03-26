@@ -5,8 +5,6 @@ import { masterDispatch } from './masterDispatch.js';
 import { getCommandRecord } from './registry.js';
 import { pendingPreSlot, setPendingPreSlot } from './asyncGenerationState.js';
 import { ensureMcupExtensionAccessTokenOrThrow } from './extensionAccessTokenLifecycle.js';
-import { dispatchAsyncGenerationRecover } from './asyncRecoverDispatch.js';
-
 /**
  * 仅填词：不登记后端 RUNNING、无 `async_job_id`；不跑找回阶段。
  * @param {number} callerTabId 熔炉页 tabId
@@ -74,17 +72,5 @@ export async function dispatchAsyncGenerationLaunch(callerTabId, asyncJobId) {
   const clientRequestId = crypto.randomUUID();
   setPendingPreSlot(null);
 
-  const launchResult = await masterDispatch(clientRequestId, command, payload, callerTabId);
-  if (launchResult.ok) {
-    try {
-      const core = String(payload.core_engine || '').trim();
-      // 即梦：第二阶段由熔炉单独发 RECOVER；仅 Gemini 在启动成功后串联占位 recover。
-      if (core.startsWith('gemini_agent')) {
-        await dispatchAsyncGenerationRecover(callerTabId, payload);
-      }
-    } catch (e) {
-      console.error('[PicPuck] dispatchAsyncGenerationRecover', e);
-    }
-  }
-  return launchResult;
+  return masterDispatch(clientRequestId, command, payload, callerTabId);
 }

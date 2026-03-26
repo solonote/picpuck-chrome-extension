@@ -9,10 +9,12 @@ import { LOG_APPEND, PICPUCK_COMMAND, ROUND_PHASE } from './runtimeMessages.js';
 import { installTabRemovedHandler } from './tabLifecycle.js';
 import { installRuntimeMessageHandlers } from './swMessages.js';
 import { installExtensionAccessTokenLifecycle } from './extensionAccessTokenLifecycle.js';
+import { installWatchLoopAlarmHandling } from './asyncWatchLoopRegistry.js';
 
 /** 启动时打印三类消息名，便于与 src/content 对照验收 CP2-4 */
 console.info('[PicPuck SW] message types:', PICPUCK_COMMAND, LOG_APPEND, ROUND_PHASE);
 
+installWatchLoopAlarmHandling();
 installTabRemovedHandler();
 installRuntimeMessageHandlers();
 installExtensionAccessTokenLifecycle();

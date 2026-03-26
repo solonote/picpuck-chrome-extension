@@ -17,6 +17,7 @@ import { JIMENG_AI_TOOL_HOME, isJimengAiToolHomeUrl } from './jimengUrls.js';
 import { ensureMcupExtensionAccessTokenOrThrow } from '../../core/extensionAccessTokenLifecycle.js';
 import { mcupPatchExtensionState } from '../../core/mcupGenerationAsyncApi.js';
 import { focusWorkTab } from '../../core/allocateTab.js';
+import { unregisterWatchLoop } from '../../core/asyncWatchLoopRegistry.js';
 
 /** 设计 §3.1.1：与 `manifest.json` `web_accessible_resources` 路径一致 */
 const JIMENG_IMAGE_MAIN_WORLD_FILE = 'src/agents/jimeng/jimengImageMainWorld.js';
@@ -186,6 +187,24 @@ async function execJimengRecoverMainRunner(ctx, opts) {
     args: [{ runnerName, payload: mergedPayload }],
   });
   const r = injRes?.result;
+  // #region agent log
+  fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd9d244' },
+    body: JSON.stringify({
+      sessionId: 'd9d244',
+      location: 'steps.js:execJimengRecoverMainRunner:result',
+      message: 'main runner result',
+      data: {
+        ok: !!(r && r.ok === true),
+        outcome: r && r.outcome,
+        code: r && r.code ? String(r.code) : '',
+      },
+      timestamp: Date.now(),
+      hypothesisId: 'H1-H5',
+    }),
+  }).catch(() => {});
+  // #endregion
   if (!r || r.ok !== true) {
     const code = r && r.code ? String(r.code) : JIMENG_WORKBENCH_NOT_READY;
     const detail = r && typeof r.detail === 'string' ? r.detail : '';
@@ -210,18 +229,38 @@ function generationEventFieldString(ge, k) {
 }
 
 function generationEventFieldsComplete(payload) {
-  const ge = payload && payload.generationEvent;
-  if (!ge || typeof ge !== 'object') return false;
-  const s = (k) => generationEventFieldString(ge, k);
-  return !!(s('projectId') && s('subjectType') && s('subjectId') && s('inputPrompt') && s('coreEngine'));
+  if (!payload || typeof payload !== 'object') return false;
+  const ge = payload.generationEvent;
+  if (ge && typeof ge === 'object') {
+    const s = (k) => generationEventFieldString(ge, k);
+    return !!(s('projectId') && s('subjectType') && s('subjectId') && s('inputPrompt') && s('coreEngine'));
+  }
+  // 熔炉「检查进度」/ list 拼出的 RECOVER 载荷仅有扁平字段，无嵌套 generationEvent
+  const pid = typeof payload.projectId === 'string' ? payload.projectId.trim() : '';
+  const st = typeof payload.subjectType === 'string' ? payload.subjectType.trim() : '';
+  const sid = typeof payload.subjectId === 'string' ? payload.subjectId.trim() : '';
+  const core = String(payload.core_engine || '').trim();
+  const ip = payload.input_prompt;
+  if (ip != null && typeof ip !== 'string') return false;
+  return !!(pid && st && sid && core);
 }
 
 /** Step19 页内 DOM 锚点（data-id、列表项 id、提示词预览）并入回传 generationEvent，供后端与后续取图一致。 */
 function buildJimengRelayGenerationEvent(payload, ctx) {
-  const ge =
-    payload && payload.generationEvent && typeof payload.generationEvent === 'object'
-      ? { ...payload.generationEvent }
-      : {};
+  /** @type {Record<string, unknown>} */
+  let ge = {};
+  if (payload && payload.generationEvent && typeof payload.generationEvent === 'object') {
+    ge = { ...payload.generationEvent };
+  } else if (payload && typeof payload === 'object') {
+    const ip = payload.input_prompt;
+    ge = {
+      projectId: typeof payload.projectId === 'string' ? payload.projectId.trim() : '',
+      subjectType: typeof payload.subjectType === 'string' ? payload.subjectType.trim() : '',
+      subjectId: typeof payload.subjectId === 'string' ? payload.subjectId.trim() : '',
+      inputPrompt: typeof ip === 'string' ? ip : '',
+      coreEngine: String(payload.core_engine || '').trim(),
+    };
+  }
   const a = ctx && ctx.jimengRecordAnchor;
   if (!a || typeof a !== 'object') return ge;
   const did = generationEventFieldString(a, 'dataId');
@@ -560,21 +599,28 @@ export async function step18_jimeng_submit_prompt_enter_if_configured(ctx) {
   });
 }
 
-/** 等待首条记录出现「生成中」语义，最长 120s */
+/**
+ * 等待首条记录出现「生成中」语义并捕获锚点，最长 120s。
+ * - **JIMENG_ASYNC_LAUNCH**：`toolbar` / `none` / `enter` 均执行（否则点工具栏「生成」无锚点、WatchLoop 不注册）。
+ * - **JIMENG_IMAGE_FILL**：仍仅 `enter` 跑本步（与同步 Step20～22 约定一致）。
+ */
 export async function step19_jimeng_wait_generation_started(ctx) {
-  const { tabId, roundId, payload } = ctx;
+  const { tabId, roundId, payload, command } = ctx;
   const stepKey = 'step19_jimeng_wait_generation_started';
-  if (payload.jimengSubmitMode !== 'enter') {
+  if (command === 'JIMENG_IMAGE_FILL' && payload.jimengSubmitMode !== 'enter') {
     logStepInfo(tabId, roundId, stepKey, 19, '本步跳过');
     return;
   }
+  const mode = requireJimengSubmitMode(payload);
+  const enterAtMs =
+    mode === 'enter' && typeof ctx.jimengEnterAtMs === 'number' ? ctx.jimengEnterAtMs : Date.now();
   const r = await execJimengMainRunnerWithResult(ctx, {
     nn: 19,
     stepKey,
     runnerName: 'runStep19WaitGenerationStarted',
-    mainPayload: { enterAtMs: ctx.jimengEnterAtMs, jimengSubmitMode: 'enter' },
+    mainPayload: { enterAtMs: enterAtMs, jimengSubmitMode: mode },
     failUserMsg: '动作失败+等待即梦开始生成超时',
-    startMsg: '等待即梦出现生成中界面',
+    startMsg: '等待即梦出现生成中界面并捕获锚点',
     doneMsg: '已检测到生成中状态',
   });
   if (r && r.jimengRecordAnchor && typeof r.jimengRecordAnchor === 'object') {
@@ -588,10 +634,6 @@ export async function step19_jimeng_wait_generation_started(ctx) {
 export async function step20_jimeng_patch_remote_after_anchor(ctx) {
   const { tabId, roundId, payload } = ctx;
   const stepKey = 'step20_jimeng_patch_remote_after_anchor';
-  if (payload.jimengSubmitMode !== 'enter') {
-    logStepInfo(tabId, roundId, stepKey, 20, '本步跳过');
-    return;
-  }
   const aj =
     payload && typeof payload.async_job_id === 'string' ? payload.async_job_id.trim().toLowerCase() : '';
   if (!/^[a-z0-9]{12}$/.test(aj)) {
@@ -727,11 +769,15 @@ export async function step04_jimeng_recover_fetch(ctx) {
     throw new Error('JIMENG_RECOVER_NO_ANCHOR');
   }
   ctx.jimengRecordAnchor = payload.jimengRecordAnchor;
+  /** recover 检查前不 focus：便于你重新抓日志对比；稳定版在此调用 focusWorkTab(tabId) 与约 500ms delay。 */
   const r = await execJimengRecoverMainRunner(ctx, {
     nn: 4,
     stepKey,
     runnerName: 'runJimengRecoverPipeline',
-    mainPayload: { jimengRecordAnchor: payload.jimengRecordAnchor },
+    mainPayload: {
+      jimengRecordAnchor: payload.jimengRecordAnchor,
+      recoverDomVerbose: payload.recoverDomVerbose === true,
+    },
     failUserMsg: '动作失败+即梦找回页内执行失败',
     startMsg: '按锚点检查是否可取回并收集结果图',
     doneMsg: '已取回结果图',
@@ -777,4 +823,6 @@ export async function step05_jimeng_recover_relay_to_caller(ctx) {
     throw e instanceof Error ? e : new Error(String(e));
   }
   logStepDone(tabId, roundId, stepKey, 5, '已回传生成图至熔炉页');
+  const ajDone = typeof payload.async_job_id === 'string' ? payload.async_job_id.trim().toLowerCase() : '';
+  if (ajDone) unregisterWatchLoop(ajDone);
 }
