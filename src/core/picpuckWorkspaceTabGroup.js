@@ -13,6 +13,24 @@ const LEGACY_WORKSPACE_GROUP_TITLE = 'PicPuck';
 
 const STORAGE_KEY = 'picpuckWorkspaceGroupByWindow';
 
+// #region agent log
+/** @param {string} msg @param {Record<string, unknown>} data @param {string} hypothesisId */
+function __dbgPicpuckTabGroup(msg, data, hypothesisId) {
+  fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '2e5487' },
+    body: JSON.stringify({
+      sessionId: '2e5487',
+      location: 'picpuckWorkspaceTabGroup.js',
+      message: msg,
+      data,
+      timestamp: Date.now(),
+      hypothesisId,
+    }),
+  }).catch(() => {});
+}
+// #endregion
+
 /**
  * 仅以组标题识别工作区分组（trim）。新建组在 `tabGroups.update` 生效前常为灰、标题空，不能再用 color===blue 否则扫描不到、会误建第二个同名组。
  * @param {chrome.tabGroups.TabGroup} g
@@ -215,11 +233,25 @@ async function resolvePicpuckGroupIdInWindow(windowId) {
   } catch {
     return null;
   }
+  const rawCount = groups.length;
   groups = await filterLiveTabGroupsInWindow(windowId, groups);
   const map = await loadGroupMap();
   const sessionGid = map[String(windowId)];
 
   const byTitle = groups.filter((g) => workspaceGroupTitleMatches(g));
+  // #region agent log
+  __dbgPicpuckTabGroup(
+    'resolvePicpuckGroupIdInWindow',
+    {
+      windowId,
+      rawTabGroupCount: rawCount,
+      liveAfterFilterCount: groups.length,
+      byTitleCount: byTitle.length,
+      sessionGid: sessionGid ?? null,
+    },
+    'H-B,H-D,H-E',
+  );
+  // #endregion
   if (byTitle.length > 0) {
     const canonical = await mergePicpuckTabGroupsInWindow(windowId, byTitle);
     // session 曾指向「刚创建、尚无标题」的另一组时，只按标题会漏合并，把该组标签并入 canonical
@@ -242,6 +274,13 @@ async function resolvePicpuckGroupIdInWindow(windowId) {
 
   const picpuck = groups.filter((g) => isPicpuckAgentWorkspaceGroup(g, sessionGid));
   if (picpuck.length === 0) {
+    // #region agent log
+    __dbgPicpuckTabGroup(
+      'resolvePicpuckGroupIdInWindow_null',
+      { windowId, picpuckFallbackLen: 0, sessionGid: sessionGid ?? null },
+      'H-D',
+    );
+    // #endregion
     return null;
   }
   return mergePicpuckTabGroupsInWindow(windowId, picpuck);
@@ -278,11 +317,30 @@ async function getOrSyncPicpuckGroupId(windowId) {
 async function runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, windowId) {
   await pruneStaleGroupMappings();
   let gid = await getOrSyncPicpuckGroupId(windowId);
+  // #region agent log
+  __dbgPicpuckTabGroup(
+    'ensureSequence_start',
+    { tabId, windowId, gidAfterGetOrSync: gid ?? null },
+    'H-D,H-E',
+  );
+  // #endregion
   if (gid != null) {
     try {
       await chrome.tabs.group({ groupId: gid, tabIds: [tabId] });
       return;
     } catch (e) {
+      // #region agent log
+      __dbgPicpuckTabGroup(
+        'tabs_group_into_existing_failed',
+        {
+          tabId,
+          windowId,
+          gid,
+          err: e instanceof Error ? e.message : String(e),
+        },
+        'H-C',
+      );
+      // #endregion
       console.warn('[PicPuck] tabs.group into PicPuck group failed', e);
       gid = await resolvePicpuckGroupIdInWindow(windowId);
       if (gid != null) {
@@ -313,7 +371,21 @@ async function runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, windowId) {
     }
   }
 
+  // #region agent log
+  __dbgPicpuckTabGroup(
+    'createProperties_new_tab_group',
+    { tabId, windowId, lastGidBeforeCreate: gid ?? null },
+    'H-A,H-B,H-C,H-D',
+  );
+  // #endregion
   const newGid = await chrome.tabs.group({ createProperties: { windowId }, tabIds: [tabId] });
+  // #region agent log
+  __dbgPicpuckTabGroup(
+    'created_new_group',
+    { tabId, windowId, newGid },
+    'H-A,H-C',
+  );
+  // #endregion
   const mapNew = await loadGroupMap();
   mapNew[String(windowId)] = newGid;
   await saveGroupMap(mapNew);
@@ -352,13 +424,26 @@ export async function ensureTabInPicpuckWorkspaceGroup(tabId) {
 
   if (typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function') {
     try {
+      // #region agent log
+      __dbgPicpuckTabGroup('ensureTab_locks_path', { tabId, wid }, 'H-A');
+      // #endregion
       await navigator.locks.request(picpuckWorkspaceTabGroupLockName(wid), { mode: 'exclusive' }, run);
       return;
     } catch (e) {
+      // #region agent log
+      __dbgPicpuckTabGroup(
+        'ensureTab_locks_failed_fallback_chain',
+        { tabId, wid, err: e instanceof Error ? e.message : String(e) },
+        'H-A',
+      );
+      // #endregion
       console.warn('[PicPuck] navigator.locks.request tab group, fallback chain', e);
     }
   }
 
+  // #region agent log
+  __dbgPicpuckTabGroup('ensureTab_promise_chain_fallback', { tabId, wid }, 'H-A');
+  // #endregion
   const prev = winGroupChain.get(wid) ?? Promise.resolve();
   const next = prev.then(run);
   winGroupChain.set(
