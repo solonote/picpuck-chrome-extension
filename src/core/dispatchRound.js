@@ -72,10 +72,10 @@ export async function dispatchRound(args) {
     await frameworkStep02_attachLogSink(ctx);
     await frameworkStep03_ensurePageHelpers(ctx);
 
-    /** 静默找回：新建 Tab 已在 allocateTab 内等完首屏 complete；此处 `applyRecoverSilentWorkTabSurface`（不整窗 focus；已 active 则跳过，否则短暂 active 再还原）。 */
+    /** 静默找回：`*_ASYNC_PROBE` 在专用工作区窗口仅 active、不跳回上一 Tab（与熔炉不同窗）；RELAY 静默路径仍短暂 active 再还原。 */
     if (rec.recoverAllocateSilentDefault === true) {
       if (isAsyncRecoverProbeCommand(command)) {
-        await applyRecoverSilentWorkTabSurface(tabId);
+        await applyRecoverSilentWorkTabSurface(tabId, { revertPreviousActive: false });
       } else {
         const wantFullFocus = await getRecoverCheckFocusWorkTab();
         if (!wantFullFocus) {

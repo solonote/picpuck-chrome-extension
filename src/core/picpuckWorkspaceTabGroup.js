@@ -1,5 +1,5 @@
 /**
- * PicPuck 工作区标签页分组：蓝色「PicPuck Agent 专用」组、仅复用组内 Tab（专用浏览器窗口内，见 picpuckWorkspaceWindow）。
+ * PicPuck 工作区标签页分组：展示名为「PicPuck Agent 专用」、蓝色；**识别组以标题（及 session 登记的 groupId）为准**，不能依赖新建瞬间的 color===blue。
  * 用户自行打开、未在本组内的同域 Tab（含裸开 Gemini）不作为候选；扩展须新建并入组。
  */
 /** @readonly 与 UI 展示一致；旧版标题「PicPuck」仍识别并迁移为本标题。 */
@@ -10,10 +10,22 @@ const LEGACY_WORKSPACE_GROUP_TITLE = 'PicPuck';
 const STORAGE_KEY = 'picpuckWorkspaceGroupByWindow';
 
 /**
+ * 仅以组标题识别工作区分组（trim）。新建组在 `tabGroups.update` 生效前常为灰、标题空，不能再用 color===blue 否则扫描不到、会误建第二个同名组。
  * @param {chrome.tabGroups.TabGroup} g
  */
-function isPicpuckAgentWorkspaceGroup(g) {
-  return g.color === 'blue' && (g.title === PICPUCK_AGENT_WORKSPACE_GROUP_TITLE || g.title === LEGACY_WORKSPACE_GROUP_TITLE);
+function workspaceGroupTitleMatches(g) {
+  const t = String(g.title || '').trim();
+  return t === PICPUCK_AGENT_WORKSPACE_GROUP_TITLE || t === LEGACY_WORKSPACE_GROUP_TITLE;
+}
+
+/**
+ * @param {chrome.tabGroups.TabGroup} g
+ * @param {number | null | undefined} sessionGid 本窗口 session 登记的组 id（用于标题尚未写回的瞬间）
+ */
+function isPicpuckAgentWorkspaceGroup(g, sessionGid) {
+  if (workspaceGroupTitleMatches(g)) return true;
+  if (sessionGid != null && g.id === sessionGid) return true;
+  return false;
 }
 
 /** @type {Map<number, Promise<void>>} */
@@ -75,7 +87,9 @@ async function resolvePicpuckGroupIdInWindow(windowId) {
   } catch {
     return null;
   }
-  const picpuck = groups.filter((g) => isPicpuckAgentWorkspaceGroup(g));
+  const map = await loadGroupMap();
+  const sessionGid = map[String(windowId)];
+  const picpuck = groups.filter((g) => isPicpuckAgentWorkspaceGroup(g, sessionGid));
   if (picpuck.length === 0) {
     return null;
   }

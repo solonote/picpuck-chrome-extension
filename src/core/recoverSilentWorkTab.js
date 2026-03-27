@@ -2,7 +2,8 @@
  * 异步找回静默路径：不调用 `windows.update({ focused: true })`。
  * 许多站点依赖「窗口内曾变为 active」才挂载业务 DOM；为减轻轮询时标签栏抢镜：
  * - 工作 Tab **已是**当前标签 → 直接返回（避免每轮无意义 `tabs.update`）。
- * - 否则 → 短暂 `active: true` 再**还原**此前窗口内的当前标签（若用户在此期间已切走则不再还原）。
+ * - `revertPreviousActive !== false`（默认）：短暂 `active: true` 再还原同窗口内上一标签（RELAY 静默路径等）。
+ * - `revertPreviousActive === false`（`*_ASYNC_PROBE`）：仅 `tabs.update(active)`，不还原——专用工作区与熔炉不同窗，轮询检查无需跳回。
  *
  * 调用约定（与 `recoverAllocateSilentDefault` / `isAsyncRecoverProbeCommand` / `getRecoverCheckFocusWorkTab` 配合）：
  * - `*_ASYNC_PROBE` / `*_ASYNC_RELAY` 在 `dispatchRound` 框架 step03 后按需调用。
@@ -24,14 +25,21 @@ function delay(ms) {
 
 /**
  * @param {number} tabId
+ * @param {{ revertPreviousActive?: boolean }} [options] 默认 true；PROBE 传 `false` 仅激活工作 Tab、不还原同窗口上一标签。
  */
-export async function applyRecoverSilentWorkTabSurface(tabId) {
+export async function applyRecoverSilentWorkTabSurface(tabId, options = {}) {
+  const revertPreviousActive = options.revertPreviousActive !== false;
   try {
     const target = await chrome.tabs.get(tabId);
     const wid = target.windowId;
     if (wid == null) return;
 
     if (target.active === true) {
+      return;
+    }
+
+    if (!revertPreviousActive) {
+      await chrome.tabs.update(tabId, { active: true });
       return;
     }
 

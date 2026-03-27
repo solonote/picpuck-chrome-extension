@@ -6,6 +6,7 @@ import { scrollBottomViaInjectMain } from '../../core/mainWorldScrollTop.js';
 import { logStepDone, logStepEnter, logStepFail, logStepInfo } from '../../core/stepLog.js';
 import { waitForTabUrlWhen } from '../../core/waitTabUrl.js';
 import { frameworkStep03_ensurePageHelpers } from '../../core/frameworkPreflight.js';
+import { focusWorkTab } from '../../core/allocateTab.js';
 import { pushRoundPhaseUi } from '../../core/phaseUi.js';
 import {
   JIMENG_IMAGE_MAIN_INJECT_FAILED,
@@ -514,6 +515,9 @@ export async function step15_jimeng_expand_at_mentions(ctx) {
     logStepInfo(tabId, roundId, stepKey, 15, '无参考图跳过展开 @ 引用');
     return;
   }
+  /** @ 选参考图依赖前台 Tab；后台时 lv-select 下拉/选片不可靠 */
+  logStepInfo(tabId, roundId, stepKey, 15, '选图前聚焦工作窗口与 Tab');
+  await focusWorkTab(tabId);
   await execJimengMainRunner(ctx, {
     nn: 15,
     stepKey,
