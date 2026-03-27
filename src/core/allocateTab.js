@@ -1,7 +1,7 @@
 /**
  * §9.4 allocateTab(command)：每次请求全量 `tabs.query`（§9.2）→ 按站点 `homeUrl` 前缀筛候选 → **再**筛 PicPuck 蓝组内 Tab（见 `picpuckWorkspaceTabGroup`）→
  * 按 tab.id 升序尝试 §9.3 原子抢占；无 idle 则 `tabs.create` 并入 PicPuck 组后再 `waitForTabUrlPrefix` 与抢占。
- * `CommandRecord.recoverAllocateSilentDefault` 为 true 时：由 `getRecoverCheckFocusWorkTab()` 决定；未设或 `false` 则**不聚焦窗口**，但会 `tabs.update(active:true)`（实验：便于后台页在窗口内成为当前标签而不 `windows.update(focused)`）；`picpuckRecoverCheckFocusTab===true` 时仍走完整 `focusWorkTab`。
+ * `CommandRecord.recoverAllocateSilentDefault` 为 true 时：由 `getRecoverCheckFocusWorkTab()` 决定；未设或 `false` 则不在此聚焦窗口，静默「窗口内 active」由 `dispatchRound` 在框架 step03 之后执行（见 `recoverSilentWorkTab.js`）；`picpuckRecoverCheckFocusTab===true` 时此处仍走完整 `focusWorkTab`。
  */
 import { getCommandRecord } from './registry.js';
 import { injectableAcquireExecSlot } from './execSlot/injectableAcquireExecSlot.js';
@@ -46,8 +46,6 @@ export async function allocateTab(command) {
     if (got.ok && got.acquired) {
       if (focusAfterAllocate) {
         await focusWorkTab(tab.id);
-      } else {
-        await activateWorkTabWithoutFocusingWindow(tab.id);
       }
       return { ok: true, tabId: tab.id };
     }
@@ -84,8 +82,6 @@ export async function allocateTab(command) {
   }
   if (focusAfterAllocate) {
     await focusWorkTab(created.id);
-  } else {
-    await activateWorkTabWithoutFocusingWindow(created.id);
   }
   return { ok: true, tabId: created.id };
 }
@@ -94,20 +90,6 @@ export async function allocateTab(command) {
  * @param {number} tabId
  * @returns {Promise<{ ok: boolean, acquired?: boolean, invalid?: boolean }>}
  */
-/**
- * 仅将工作 Tab 设为所在窗口的当前标签，**不**调用 `windows.update({ focused: true })`（实验：减轻抢整窗焦点，仍可能触发站点「当前标签」类逻辑）。
- * @param {number} tabId
- */
-export async function activateWorkTabWithoutFocusingWindow(tabId) {
-  console.info('[PicPuck] activateWorkTabWithoutFocusingWindow 执行前', { tabId });
-  try {
-    await chrome.tabs.update(tabId, { active: true });
-    console.info('[PicPuck] activateWorkTabWithoutFocusingWindow 执行后（tabs.update 已成功）', { tabId });
-  } catch (e) {
-    console.warn('[PicPuck] activateWorkTabWithoutFocusingWindow failed tab=%d', tabId, e);
-  }
-}
-
 /**
  * 激活工作 Tab 并聚焦其窗口（异步找回「取回」就绪后由步骤显式调用；普通指令在 allocateTab 内按需调用）。
  * @param {number} tabId
