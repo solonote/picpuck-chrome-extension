@@ -466,7 +466,7 @@ export async function step13_gemini_download_full_image_to_clipboard(ctx) {
   });
 }
 
-/** GEMINI_ASYNC_LAUNCH：提交后捕获 `/app/{id}` + 末轮 `conversation-container` id 并 PATCH 后端。 */
+/** GEMINI_ASYNC_LAUNCH：提交后捕获 `/app/{id}` + 末轮 `conversation-container` id，并组好 `pendingExtensionRemoteContext`。 */
 export async function step12_gemini_async_capture_anchor_and_patch(ctx) {
   const { tabId, roundId, payload, command } = ctx;
   const stepKey = 'step12_gemini_async_capture_anchor';
