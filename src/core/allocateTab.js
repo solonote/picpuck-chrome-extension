@@ -1,6 +1,7 @@
 /**
  * §9.4 allocateTab(command)：每次请求全量 `tabs.query`（§9.2）→ 按站点 `homeUrl` 前缀筛候选 → **再**筛 PicPuck 蓝组内 Tab（见 `picpuckWorkspaceTabGroup`）→
  * 按 tab.id 升序尝试 §9.3 原子抢占；无 idle 则 `tabs.create` 并入 PicPuck 组后再 `waitForTabUrlPrefix` 与抢占。
+ * 新建 Tab 且不要求抢焦点时：`waitForTabUrlPrefix`（首帧 complete）后再 `tabs.update({ active: false })`，避免导航过程中偶发抢当前标签。
  * `CommandRecord.recoverAllocateSilentDefault` 为 true 时：由 `getRecoverCheckFocusWorkTab()` 决定；未设或 `false` 则静默；`picpuckRecoverCheckFocusTab===true` 时检查阶段激活工作 Tab。
  */
 import { getCommandRecord } from './registry.js';
@@ -74,6 +75,14 @@ export async function allocateTab(command) {
   } catch (e) {
     console.warn('[PicPuck] waitForTabUrlPrefix', e);
     return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'new tab url timeout' };
+  }
+
+  if (!focusAfterAllocate) {
+    try {
+      await chrome.tabs.update(created.id, { active: false });
+    } catch (e) {
+      console.warn('[PicPuck] tabs.update active:false after new tab load tab=%d', created.id, e);
+    }
   }
 
   const got = await tryAcquireOnTab(created.id);
