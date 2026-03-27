@@ -1,8 +1,7 @@
 /**
  * §9.4 allocateTab(command)：每次请求全量 `tabs.query`（§9.2）→ 按站点 `homeUrl` 前缀筛候选 → **再**筛 PicPuck 蓝组内 Tab（见 `picpuckWorkspaceTabGroup`）→
  * 按 tab.id 升序尝试 §9.3 原子抢占；无 idle 则 `tabs.create` 并入 PicPuck 组后再 `waitForTabUrlPrefix` 与抢占。
- * 新建 Tab 且不要求抢焦点时：`waitForTabUrlPrefix`（首帧 complete）后再 `tabs.update({ active: false })`，避免导航过程中偶发抢当前标签。
- * `CommandRecord.recoverAllocateSilentDefault` 为 true 时：由 `getRecoverCheckFocusWorkTab()` 决定；未设或 `false` 则静默；`picpuckRecoverCheckFocusTab===true` 时检查阶段激活工作 Tab。
+ * `CommandRecord.recoverAllocateSilentDefault` 为 true 时：由 `getRecoverCheckFocusWorkTab()` 决定；未设或 `false` 则**不聚焦窗口**，但会 `tabs.update(active:true)`（实验：便于后台页在窗口内成为当前标签而不 `windows.update(focused)`）；`picpuckRecoverCheckFocusTab===true` 时仍走完整 `focusWorkTab`。
  */
 import { getCommandRecord } from './registry.js';
 import { injectableAcquireExecSlot } from './execSlot/injectableAcquireExecSlot.js';
@@ -47,6 +46,8 @@ export async function allocateTab(command) {
     if (got.ok && got.acquired) {
       if (focusAfterAllocate) {
         await focusWorkTab(tab.id);
+      } else {
+        await activateWorkTabWithoutFocusingWindow(tab.id);
       }
       return { ok: true, tabId: tab.id };
     }
@@ -77,20 +78,14 @@ export async function allocateTab(command) {
     return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'new tab url timeout' };
   }
 
-  if (!focusAfterAllocate) {
-    try {
-      await chrome.tabs.update(created.id, { active: false });
-    } catch (e) {
-      console.warn('[PicPuck] tabs.update active:false after new tab load tab=%d', created.id, e);
-    }
-  }
-
   const got = await tryAcquireOnTab(created.id);
   if (!got.ok || !got.acquired) {
     return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'acquire after create failed' };
   }
   if (focusAfterAllocate) {
     await focusWorkTab(created.id);
+  } else {
+    await activateWorkTabWithoutFocusingWindow(created.id);
   }
   return { ok: true, tabId: created.id };
 }
@@ -99,6 +94,18 @@ export async function allocateTab(command) {
  * @param {number} tabId
  * @returns {Promise<{ ok: boolean, acquired?: boolean, invalid?: boolean }>}
  */
+/**
+ * 仅将工作 Tab 设为所在窗口的当前标签，**不**调用 `windows.update({ focused: true })`（实验：减轻抢整窗焦点，仍可能触发站点「当前标签」类逻辑）。
+ * @param {number} tabId
+ */
+export async function activateWorkTabWithoutFocusingWindow(tabId) {
+  try {
+    await chrome.tabs.update(tabId, { active: true });
+  } catch (e) {
+    console.warn('[PicPuck] activateWorkTabWithoutFocusingWindow failed tab=%d', tabId, e);
+  }
+}
+
 /**
  * 激活工作 Tab 并聚焦其窗口（异步找回「取回」就绪后由步骤显式调用；普通指令在 allocateTab 内按需调用）。
  * @param {number} tabId
