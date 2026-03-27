@@ -222,19 +222,39 @@ async function mergePicpuckTabGroupsInWindow(windowId, picpuck) {
 }
 
 /**
+ * `tabGroups.query({ windowId })` 在部分时序下会瞬时返回 []（runtime：debug-2e5487 第2行 raw=0，约 1s 后同 window raw=1）。
+ * 回退为 `query({})` 再按 windowId 过滤，避免误判「无组」而连开多个 createProperties。
+ * @param {number} windowId
+ * @returns {Promise<{ groups: chrome.tabGroups.TabGroup[], usedGlobalFallback: boolean }>}
+ */
+async function queryTabGroupsForWindowRobust(windowId) {
+  let primary = [];
+  try {
+    primary = await chrome.tabGroups.query({ windowId });
+  } catch {
+    primary = [];
+  }
+  if (primary.length > 0) {
+    return { groups: primary, usedGlobalFallback: false };
+  }
+  try {
+    const all = await chrome.tabGroups.query({});
+    const filtered = all.filter((g) => g.windowId === windowId);
+    return { groups: filtered, usedGlobalFallback: filtered.length > 0 };
+  } catch {
+    return { groups: [], usedGlobalFallback: false };
+  }
+}
+
+/**
  * 扫描窗口内 PicPuck 分组 ID：**先按组标题**（含旧标题 PicPuck）在 Chrome 里找，得到 id；无标题命中再回退 session（新建组标题尚未写回的瞬间）。
  * @param {number} windowId
  * @returns {Promise<number | null>} 合并后应使用的 groupId；无则 null
  */
 async function resolvePicpuckGroupIdInWindow(windowId) {
-  let groups;
-  try {
-    groups = await chrome.tabGroups.query({ windowId });
-  } catch {
-    return null;
-  }
-  const rawCount = groups.length;
-  groups = await filterLiveTabGroupsInWindow(windowId, groups);
+  const { groups: rawGroups, usedGlobalFallback } = await queryTabGroupsForWindowRobust(windowId);
+  const rawCount = rawGroups.length;
+  let groups = await filterLiveTabGroupsInWindow(windowId, rawGroups);
   const map = await loadGroupMap();
   const sessionGid = map[String(windowId)];
 
@@ -245,6 +265,7 @@ async function resolvePicpuckGroupIdInWindow(windowId) {
     {
       windowId,
       rawTabGroupCount: rawCount,
+      usedGlobalQueryFallback: usedGlobalFallback,
       liveAfterFilterCount: groups.length,
       byTitleCount: byTitle.length,
       sessionGid: sessionGid ?? null,
@@ -369,6 +390,34 @@ async function runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, windowId) {
     } catch (e) {
       console.warn('[PicPuck] tabs.group last-chance before create failed', e);
     }
+  }
+
+  try {
+    const tabNow = await chrome.tabs.get(tabId);
+    const gFromTab = tabNow.groupId;
+    const groupNone =
+      typeof chrome.tabGroups?.TAB_GROUP_ID_NONE === 'number' ? chrome.tabGroups.TAB_GROUP_ID_NONE : -1;
+    if (typeof gFromTab === 'number' && gFromTab !== groupNone) {
+      const tgLive = await getLiveTabGroupInWindow(windowId, gFromTab);
+      if (tgLive) {
+        const mapSnap = await loadGroupMap();
+        const sess = mapSnap[String(windowId)];
+        if (workspaceGroupTitleMatches(tgLive) || isPicpuckAgentWorkspaceGroup(tgLive, sess)) {
+          mapSnap[String(windowId)] = tgLive.id;
+          await saveGroupMap(mapSnap);
+          // #region agent log
+          __dbgPicpuckTabGroup(
+            'ensureSequence_skip_create_already_in_picpuck',
+            { tabId, windowId, groupId: gFromTab },
+            'post-fix',
+          );
+          // #endregion
+          return;
+        }
+      }
+    }
+  } catch {
+    /* ignore */
   }
 
   // #region agent log
