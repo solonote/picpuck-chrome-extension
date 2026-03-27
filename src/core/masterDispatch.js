@@ -3,6 +3,7 @@
  */
 import { allocateTab } from './allocateTab.js';
 import { dispatchRound } from './dispatchRound.js';
+import { registerWatchLoopAfterJimengLaunch } from './asyncWatchLoopRegistry.js';
 import { detachLogSink } from './logSink.js';
 import { releaseExecSlot } from './releaseExecSlot.js';
 import { inFlightByTabId, roundBinding } from './taskBindings.js';
@@ -12,7 +13,7 @@ import { registerGeminiRelayCallerTab, registerJimengRelayCallerTab } from './re
  * @param {string} clientRequestId
  * @param {string} command CommandRecord.command
  * @param {Record<string, unknown>} payload
- * @returns {Promise<{ ok: boolean, roundId: string, tabId: number, phase: string, errorCode?: string }>}
+ * @returns {Promise<{ ok: boolean, roundId: string, tabId: number, phase: string, errorCode?: string, probeOutcome?: string }>}
  */
 export async function masterDispatch(clientRequestId, command, payload, callerTabId) {
   const roundId = crypto.randomUUID();
@@ -45,7 +46,8 @@ export async function masterDispatch(clientRequestId, command, payload, callerTa
   if (
     (command === 'JIMENG_IMAGE_FILL' ||
       command === 'JIMENG_ASYNC_LAUNCH' ||
-      command === 'JIMENG_ASYNC_RECOVER') &&
+      command === 'JIMENG_ASYNC_PROBE' ||
+      command === 'JIMENG_ASYNC_RELAY') &&
     callerTabId != null &&
     callerTabId > 0
   ) {
@@ -54,12 +56,16 @@ export async function masterDispatch(clientRequestId, command, payload, callerTa
 
   try {
     const dr = await dispatchRound({ clientRequestId, command, tabId, roundId, payload });
+    if (dr.phase === 'success' && dr.jimengWatchLoopRegister) {
+      registerWatchLoopAfterJimengLaunch(dr.jimengWatchLoopRegister);
+    }
     return {
       ok: dr.phase === 'success',
       roundId,
       tabId,
       phase: dr.phase,
       errorCode: dr.phase === 'success' ? undefined : 'ROUND_FAILED',
+      ...(dr.probeOutcome ? { probeOutcome: dr.probeOutcome } : {}),
     };
   } catch (e) {
     // dispatchRound 正常路径不应抛错；此处兜底防止票据与执行槽泄漏（§5.0 INTERNAL_TAB_STATE_ERROR 语义）

@@ -1,6 +1,6 @@
 /**
  * 异步生成「启动阶段」：提交到 Step19 捕获锚点 + Step20 PATCH 后端；
- * 等待出图与回传由熔炉稍后发起 `picpuckAsyncPhase: RECOVER`（JIMENG_ASYNC_RECOVER）。
+ * 等待出图与回传由熔炉稍后发起 `picpuckAsyncPhase: RECOVER`（扩展内 PROBE → PATCH → RELAY）。
  */
 import { registerAgentCommands } from '../../core/registry.js';
 import { JIMENG_AI_TOOL_HOME } from './jimengUrls.js';

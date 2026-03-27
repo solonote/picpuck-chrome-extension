@@ -60,35 +60,6 @@ export async function startJimengRecoverPageWatcherFromLaunch(args) {
     const sr = startRes && startRes.result;
     if (!sr || sr.ok !== true) {
       console.warn('[PicPuck] jimeng page watcher: MAIN 未启动', sr);
-      // #region agent log
-      fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd9d244' },
-        body: JSON.stringify({
-          sessionId: 'd9d244',
-          location: 'core/jimengRecoverPageWatcherLaunch.js:start',
-          message: 'page watcher MAIN start failed',
-          data: { result: sr || null, workTabId },
-          timestamp: Date.now(),
-          hypothesisId: 'H_REINJECT',
-        }),
-      }).catch(() => {});
-      // #endregion
-    } else {
-      // #region agent log
-      fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd9d244' },
-        body: JSON.stringify({
-          sessionId: 'd9d244',
-          location: 'core/jimengRecoverPageWatcherLaunch.js:start',
-          message: 'page watcher MAIN start ok',
-          data: { workTabId, async_job_id: packed.async_job_id },
-          timestamp: Date.now(),
-          hypothesisId: 'H_WATCHER_STARTED',
-        }),
-      }).catch(() => {});
-      // #endregion
     }
   } catch (e2) {
     console.warn('[PicPuck] jimeng page watcher: start failed', e2);

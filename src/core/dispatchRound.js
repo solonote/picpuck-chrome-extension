@@ -16,9 +16,12 @@ import {
   frameworkStep03_ensurePageHelpers,
 } from './frameworkPreflight.js';
 import { startJimengRecoverPageWatcherFromLaunch } from './jimengRecoverPageWatcherLaunch.js';
+import { resolveProfileByCoreEngine } from './asyncEngineProfiles.js';
+import { submitFrameworkAsyncJobOutcomeIfPresent } from './frameworkAsyncJobOutcome.js';
+import { notifyAsyncJobRecoverFinished } from './asyncWatchLoopRegistry.js';
 /**
  * @param {{ clientRequestId: string, command: string, tabId: number, roundId: string, payload: Record<string, unknown> }} args
- * @returns {Promise<{ phase: string }>}
+ * @returns {Promise<{ phase: string, probeOutcome?: string, jimengWatchLoopRegister?: { async_job_id: string, recoverPayload: Record<string, unknown>, callerTabId?: number } }>}
  */
 export async function dispatchRound(args) {
   const { clientRequestId, command, tabId, roundId, payload } = args;
@@ -30,13 +33,13 @@ export async function dispatchRound(args) {
     roundBinding.delete(roundId);
     clearJimengRelayCallerTabRegistration(roundId);
     detachLogSink(tabId);
-    return { phase: 'error' };
+    return { phase: 'error', jimengWatchLoopRegister: undefined };
   }
 
   /**
    * Gemini：`step07_gemini_apply_effective_prompt_on_context` 写入 `effectivePrompt`，
    * `step09_gemini_fill_input_and_paste_images` 读取（设计 §5.1 / §11.1）。
-   * @type {{ tabId: number, roundId: string, command: string, clientRequestId: string, payload: Record<string, unknown>, effectivePrompt?: string }}
+   * @type {{ tabId: number, roundId: string, command: string, clientRequestId: string, payload: Record<string, unknown>, effectivePrompt?: string, frameworkAsyncJobOutcome?: object }}
    */
   const ctx = {
     tabId,
@@ -51,6 +54,9 @@ export async function dispatchRound(args) {
   c.roundId = roundId;
   c.command = command;
   c.startedAt = Date.now();
+
+  /** LAUNCH 成功且含锚点时由 `masterDispatch` 调用 `registerWatchLoopAfterJimengLaunch`（避免 dispatchRound ↔ asyncWatchLoopRegistry 循环依赖） */
+  let jimengWatchLoopRegister;
 
   try {
     updatePhase(tabId, 'received');
@@ -85,7 +91,40 @@ export async function dispatchRound(args) {
       assertAsyncJobNotCancelled();
     }
 
-    if (command === 'JIMENG_ASYNC_LAUNCH') {
+    const outcomeSubmit = await submitFrameworkAsyncJobOutcomeIfPresent(ctx);
+    if (
+      outcomeSubmit.submitted &&
+      outcomeSubmit.outcomeType === 'SUCCEEDED' &&
+      ctx.command === 'JIMENG_ASYNC_RELAY'
+    ) {
+      const ajDone =
+        ctx.payload && typeof ctx.payload.async_job_id === 'string'
+          ? ctx.payload.async_job_id.trim().toLowerCase()
+          : '';
+      if (ajDone) {
+        let keepLoop = false;
+        try {
+          keepLoop =
+            resolveProfileByCoreEngine(String(ctx.payload.core_engine || '').trim())
+              .keepWatchLoopAfterRelaySuccess === true;
+        } catch {
+          keepLoop = false;
+        }
+        if (!keepLoop) notifyAsyncJobRecoverFinished(ajDone);
+      }
+    }
+
+    let launchProfile = null;
+    try {
+      launchProfile = resolveProfileByCoreEngine(String(payload.core_engine || '').trim());
+    } catch {
+      launchProfile = null;
+    }
+    if (
+      launchProfile &&
+      command === launchProfile.launchCommand &&
+      launchProfile.registerWatchLoopOnLaunchSuccess === true
+    ) {
       const aj = typeof payload.async_job_id === 'string' ? payload.async_job_id.trim().toLowerCase() : '';
       const ajOk = /^[a-z0-9]{12}$/.test(aj);
       const hasAnchor = !!(ctx.jimengRecordAnchor && typeof ctx.jimengRecordAnchor === 'object');
@@ -107,6 +146,11 @@ export async function dispatchRound(args) {
           forgeCallerTabId: typeof callerTabId === 'number' ? callerTabId : 0,
           recoverPayload,
         }).catch((e) => console.warn('[PicPuck] jimeng page watcher launch', e));
+        jimengWatchLoopRegister = {
+          async_job_id: aj,
+          recoverPayload,
+          callerTabId: typeof callerTabId === 'number' ? callerTabId : undefined,
+        };
         appendLog(tabId, {
           ts: Date.now(),
           roundId,
@@ -184,5 +228,24 @@ export async function dispatchRound(args) {
     detachLogSink(tabId);
   }
 
-  return { phase: getContext(tabId)?.phase ?? 'error' };
+  const phase = getContext(tabId)?.phase ?? 'error';
+  let probeProfile = null;
+  try {
+    probeProfile = resolveProfileByCoreEngine(String(payload.core_engine || '').trim());
+  } catch {
+    probeProfile = null;
+  }
+  const probeOutcome =
+    probeProfile &&
+    probeProfile.probeCommand &&
+    command === probeProfile.probeCommand &&
+    typeof ctx.jimengProbeOutcome === 'string' &&
+    ctx.jimengProbeOutcome.trim()
+      ? ctx.jimengProbeOutcome.trim()
+      : undefined;
+  return {
+    phase,
+    jimengWatchLoopRegister: phase === 'success' ? jimengWatchLoopRegister : undefined,
+    ...(probeOutcome ? { probeOutcome } : {}),
+  };
 }

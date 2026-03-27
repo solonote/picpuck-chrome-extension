@@ -26,11 +26,11 @@ assert.equal(
     roundId: 'r1',
     step: 'step03_foo',
     level: 'info',
-    message: 'Step03.进入步骤',
+    message: 'Step03.业务可见摘要示例',
   }).ok,
   true,
 );
-assert.equal(getContext(tab1).lastInfoMessage, 'Step03.进入步骤');
+assert.equal(getContext(tab1).lastInfoMessage, 'Step03.业务可见摘要示例');
 assert.equal(getContext(tab1).logs.length, 1);
 
 appendLog(tab1, {
@@ -41,7 +41,7 @@ appendLog(tab1, {
   message: 'Step03.debug.err',
 });
 assert.equal(getContext(tab1).logs.length, 2);
-assert.equal(getContext(tab1).lastInfoMessage, 'Step03.进入步骤');
+assert.equal(getContext(tab1).lastInfoMessage, 'Step03.业务可见摘要示例');
 
 // CP1-3
 clearLogs(tab1);

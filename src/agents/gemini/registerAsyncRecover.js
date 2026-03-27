@@ -1,7 +1,9 @@
 /**
- * 异步「找回」占位：PATCH → 可取消等待 → complete（FAILED 占位）（设计 **02** 第二阶段）。
+ * 异步「找回」占位：PATCH → 可取消等待 → 框架提交 FAILED complete（设计 **02** 第二阶段）。
  */
 import { registerAgentCommands } from '../../core/registry.js';
+import { registerAsyncRecoverPayloadValidator } from '../../core/asyncRecoverValidators.js';
+import { validateGeminiRecoverMergedPayload } from './recoverValidator.js';
 import { GEMINI_APP_HOME } from './geminiUrls.js';
 import {
   step04_recover_patch_remote_ready_placeholder,
@@ -23,3 +25,5 @@ registerAgentCommands([
     ],
   },
 ]);
+
+registerAsyncRecoverPayloadValidator('gemini_agent', validateGeminiRecoverMergedPayload);

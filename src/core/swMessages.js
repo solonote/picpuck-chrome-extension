@@ -23,6 +23,7 @@ import {
 import { handlePicpuckAsyncGeneration } from './asyncGenerationHandlers.js';
 import { dispatchAsyncGenerationRecover } from './asyncRecoverDispatch.js';
 import { isTabInPicpuckWorkspaceGroup } from './picpuckWorkspaceTabGroup.js';
+import { focusWorkTab } from './allocateTab.js';
 
 /** 与 `frontend-v2/src/utils/picpuckExtension.js` 中 PICPUCK_EXTENSION_COMMAND 一致 */
 const PAGE_CMD_TYPE = 'IdlinkExtensionCommand';
@@ -303,32 +304,26 @@ export function installRuntimeMessageHandlers() {
         return true;
       }
 
-      /** 即梦：页内 watcher 每轮快照 → SW console（不依赖即梦 Tab 开 DevTools；LOG_APPEND 在 LAUNCH 结束后无 sink 会丢） */
-      if (payload.action === '__picpuckJimengWatcherTelemetry') {
-        const tel = payload.telemetry && typeof payload.telemetry === 'object' ? payload.telemetry : null;
-        const workTabId = sender.tab?.id;
-        if (tel) {
-          console.info('[PicPuck] JimengRecoverWatch', { workTabId, ...tel });
+      /** 即梦：Step21 收集前 MAIN 请求将本 Tab 置前并聚焦窗口（后台时右键/剪贴板不可靠） */
+      if (payload.action === '__picpuckJimengActivateTabForCollect') {
+        const tabId = sender.tab?.id;
+        if (tabId == null) {
+          sendResponse({ ok: false, error: 'no tab' });
+          return;
         }
-        // #region agent log
-        fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd9d244' },
-          body: JSON.stringify({
-            sessionId: 'd9d244',
-            location: 'swMessages.js:JimengWatcherTelemetry',
-            message: 'watcher tick',
-            data: { workTabId: workTabId ?? null, telemetry: tel },
-            timestamp: Date.now(),
-            hypothesisId: 'W_TELEMETRY',
-          }),
-        }).catch(() => {});
-        // #endregion
-        sendResponse({ ok: true });
-        return;
+        (async () => {
+          try {
+            await focusWorkTab(tabId);
+            sendResponse({ ok: true });
+          } catch (e) {
+            const m = e instanceof Error ? e.message : String(e);
+            sendResponse({ ok: false, error: m });
+          }
+        })();
+        return true;
       }
 
-      /** 即梦：目标页 MAIN watcher 判定结果区就绪 → CS → 本处触发第二阶段 RECOVER（熔炉 Tab） */
+      /** 即梦：目标页 MAIN watcher 判定结果区就绪 → CS → 本处触发 PROBE→RELAY（熔炉 Tab） */
       if (payload.action === '__picpuckJimengPageRecoverReady') {
         (async () => {
           try {

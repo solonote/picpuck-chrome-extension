@@ -1,11 +1,11 @@
 /**
- * 异步「找回」占位步骤（设计 **02** 第二阶段、**已确认决策** §6）：PATCH → 可取消等待 → complete 终态。
- * 站内取图 / SUCCEEDED 后续替换为本步之后的真实逻辑。
+ * 异步「找回」占位步骤（设计 **02** 第二阶段、**已确认决策** §6）：PATCH → 可取消等待 → 登记终态由框架提交。
+ * 站内取图 / SUCCEEDED 后续替换为本步之后的真实逻辑；不得在本文件内直连 generation-async/complete。
  */
 import { delay } from './asyncCancellable.js';
 import { isAsyncJobCancelled } from './asyncGenerationState.js';
 import { ensureMcupExtensionAccessTokenOrThrow } from './extensionAccessTokenLifecycle.js';
-import { mcupPatchExtensionState, mcupPostGenerationAsyncComplete } from './mcupGenerationAsyncApi.js';
+import { mcupPatchExtensionState } from './mcupGenerationAsyncApi.js';
 
 function asyncJobIdFromCtx(ctx) {
   const raw = ctx?.payload && typeof ctx.payload.async_job_id === 'string' ? ctx.payload.async_job_id.trim() : '';
@@ -43,10 +43,9 @@ export async function step05_recover_poll_placeholder(ctx) {
 }
 
 /**
- * 占位：以 FAILED 结束 RUNNING（无图）；真实找回成功路径应改为 SUCCEEDED + 文件 parts。
+ * 占位：登记 FAILED 终态（无图）；由 dispatchRound 末尾统一提交 complete，本步不直连 HTTP。
  */
 export async function step06_recover_complete_placeholder_failed(ctx) {
-  await ensureMcupExtensionAccessTokenOrThrow();
   const p = ctx.payload && typeof ctx.payload === 'object' ? ctx.payload : {};
   const asyncJobId = asyncJobIdFromCtx(ctx);
   const projectId = String(p.projectId || '').trim();
@@ -62,15 +61,15 @@ export async function step06_recover_complete_placeholder_failed(ctx) {
   if (!asyncJobId || !projectId || !subjectType || !subjectId) {
     throw new Error('recover complete: missing subject fields');
   }
-  const fd = new FormData();
-  fd.append('async_job_id', asyncJobId);
-  fd.append('outcome', 'FAILED');
-  fd.append('error_message', 'RECOVER_PLACEHOLDER_NO_IMAGE_YET');
-  fd.append('projectId', projectId);
-  fd.append('subjectType', subjectType);
-  fd.append('subjectId', subjectId);
-  fd.append('input_prompt', inputPrompt);
-  if (coreEngine) fd.append('core_engine', coreEngine);
-  await mcupPostGenerationAsyncComplete(fd);
+  ctx.frameworkAsyncJobOutcome = {
+    type: 'FAILED',
+    error_message: 'RECOVER_PLACEHOLDER_NO_IMAGE_YET',
+    async_job_id: asyncJobId,
+    projectId,
+    subjectType,
+    subjectId,
+    input_prompt: inputPrompt,
+    core_engine: coreEngine,
+  };
   return { ok: true };
 }

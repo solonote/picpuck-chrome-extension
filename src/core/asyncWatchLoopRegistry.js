@@ -1,26 +1,30 @@
 /**
- * WatchLoop：设计 **10**；即梦 `JIMENG_ASYNC_RECOVER` 经 `dispatchAsyncGenerationRecover`；禁止 `setInterval`。
- * 调度用 `chrome.alarms` 的 **`when` 绝对时间**（毫秒）；`delayInMinutes` 过小在部分 Chromium 上不可靠，表现为 alarm 从不触发。
- * **条目须写入 `chrome.storage.session`**：闹钟触发时 SW 常冷启动，内存 Map 为空，否则 `runProbeInner` 无 entry 直接返回且无任何日志。
- * 页内 JimengRecoverWatch 由 `jimengRecoverPageWatcherLaunch.js` 静态导入（SW 禁止动态 `import()`）。
+ * 即梦异步「检测进度」：
+ * 1. LAUNCH 成功：`masterDispatch` 在 round 成功后调用 `registerWatchLoopAfterJimengLaunch`；或熔炉 `RECOVER` / `WATCH_PROBE` → `onManualProbeRequest`。
+ * 2. `chrome.alarms` 触发 → 注入的 `dispatchAsyncGenerationRecover`（payload 存 `chrome.storage.session` 以扛 SW 冷启动）。
+ * 3. RECOVER 跑完后若得到工作 Tab，在工作 Tab 挂 `startJimengRecoverPageWatcher`；页内判定就绪则 `JIMENG_PAGE_RECOVER_READY` 再 dispatch 一轮 RECOVER 取图。
+ * 4. 成功回传 / 失败 / CANCEL → `unregisterWatchLoop`。
  */
-import { dispatchAsyncGenerationRecover } from './asyncRecoverDispatch.js';
-import { getContext } from './roundContext.js';
-import { getCommandRecord } from './registry.js';
 import { startJimengRecoverPageWatcherFromLaunch } from './jimengRecoverPageWatcherLaunch.js';
-import { filterAndSortCandidates } from './tabCandidates.js';
-import { filterPicpuckWorkspaceCandidates } from './picpuckWorkspaceTabGroup.js';
+import { resolveProfileByCoreEngine } from './asyncEngineProfiles.js';
+
+/**
+ * @type {((callerTabId: number, payload: Record<string, unknown>) => Promise<{ ok?: boolean, tabId?: number }>) | null}
+ */
+let dispatchAsyncGenerationRecoverRef = null;
+
+/**
+ * 须在 `installWatchLoopAlarmHandling` 之前由 `swMain` 调用一次。
+ * @param {typeof import('./asyncRecoverDispatch.js').dispatchAsyncGenerationRecover} fn
+ */
+export function setDispatchAsyncGenerationRecoverForWatchLoop(fn) {
+  dispatchAsyncGenerationRecoverRef = typeof fn === 'function' ? fn : null;
+}
 
 const WATCH_LOOP_ALARM_PREFIX = 'picpuckWL:';
-/** session 键前缀，与 alarm name 分离 */
 const WATCH_LOOP_SESSION_PREFIX = 'picpuckWLSess:';
-/** LAUNCH 后首次与 not_ready 后再次检查的间隔 */
 const WATCH_PROBE_INTERVAL_MS = 5000;
-/** 熔炉「检查进度」防抖：略大于单次 session 写入 + 组/Tab 落稳，避免 alarm 与 UI 竞态 */
-const WATCH_MANUAL_PROBE_DELAY_MS = 1000;
-/** 探测前解析组内即梦 Tab：alarm 与冷启动同时到达时可能尚未出现在 tabs.query，短轮询等待 */
-const PROBE_JIMENG_TAB_RESOLVE_ATTEMPTS = 10;
-const PROBE_JIMENG_TAB_RESOLVE_GAP_MS = 400;
+const WATCH_MANUAL_PROBE_DELAY_MS = 400;
 
 /** @type {Map<string, { recoverPayload: Record<string, unknown>, callerTabId?: number }>} */
 const watchLoopPayloads = new Map();
@@ -37,63 +41,9 @@ function normalizeId(id) {
   return String(id || '').trim().toLowerCase();
 }
 
-/**
- * 不抢占 exec slot：仅解析 PicPuck 组内即梦 Tab，供 WatchLoop「检查进度」路径注入页内观测（无 LAUNCH 时原先不会挂 watcher）。
- * @returns {Promise<number>}
- */
-async function tryResolveJimengWorkTabIdForProbeWatch() {
-  const rec = getCommandRecord('JIMENG_ASYNC_RECOVER');
-  if (!rec || typeof rec.homeUrl !== 'string') return 0;
-  let all = [];
-  try {
-    all = await chrome.tabs.query({});
-  } catch {
-    return 0;
-  }
-  const urlSorted = filterAndSortCandidates(all, rec.homeUrl);
-  const candidates = await filterPicpuckWorkspaceCandidates(urlSorted);
-  if (!candidates.length) return 0;
-  const sorted = [...candidates].sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
-  const tid = sorted[0].id;
-  return typeof tid === 'number' && tid > 0 ? tid : 0;
-}
-
-function delayWatchLoopMs(ms) {
-  return new Promise((r) => {
-    setTimeout(r, Math.max(0, Number(ms) || 0));
-  });
-}
-
-/**
- * @returns {Promise<number>}
- */
-async function tryResolveJimengWorkTabIdForProbeWatchWithRetries() {
-  for (let attempt = 1; attempt <= PROBE_JIMENG_TAB_RESOLVE_ATTEMPTS; attempt += 1) {
-    const tabId = await tryResolveJimengWorkTabIdForProbeWatch();
-    if (tabId > 0) {
-      if (attempt > 1) {
-        console.info('[PicPuck] WatchLoop 探测前第 ' + attempt + ' 次解析到组内即梦 Tab', { workTabId: tabId });
-      }
-      return tabId;
-    }
-    if (attempt < PROBE_JIMENG_TAB_RESOLVE_ATTEMPTS) {
-      await delayWatchLoopMs(PROBE_JIMENG_TAB_RESOLVE_GAP_MS);
-    }
-  }
-  return 0;
-}
-
-/**
- * @param {{ workTabId: number, asyncJobId: string, callerTabId: number, recoverPayload: Record<string, unknown>, timing: string }} args
- */
 function scheduleJimengProbePageWatcher(args) {
-  const { workTabId, asyncJobId, callerTabId, recoverPayload, timing } = args;
+  const { workTabId, asyncJobId, callerTabId, recoverPayload } = args;
   if (typeof workTabId !== 'number' || workTabId <= 0) return;
-  console.info('[PicPuck] WatchLoop 启动页内 JimengRecoverWatch', {
-    async_job_id: asyncJobId,
-    workTabId,
-    timing,
-  });
   void startJimengRecoverPageWatcherFromLaunch({
     workTabId,
     roundId: '',
@@ -137,10 +87,6 @@ export function installWatchLoopAlarmHandling() {
   watchLoopAlarmListenerInstalled = true;
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (!alarm.name.startsWith(WATCH_LOOP_ALARM_PREFIX)) return;
-    console.info('[PicPuck] watchLoop onAlarm', {
-      name: alarm.name,
-      scheduledTime: alarm.scheduledTime,
-    });
     const raw = alarm.name.slice(WATCH_LOOP_ALARM_PREFIX.length);
     const id = normalizeId(raw);
     void runProbeLoopEntry(id).catch((e) => {
@@ -165,13 +111,6 @@ export function scheduleNextProbe(asyncJobId, delayMs) {
   void chrome.alarms
     .clear(name)
     .then(() => chrome.alarms.create(name, { when }))
-    .then(() => {
-      console.info('[PicPuck] watchLoop alarm 已设置', {
-        async_job_id: id,
-        delayMs: ms,
-        fireAtEpochMs: when,
-      });
-    })
     .catch((e) => {
       console.error('[PicPuck] watchLoop alarm 设置失败', { async_job_id: id, e });
     });
@@ -189,16 +128,13 @@ export function registerWatchLoopAfterJimengLaunch({ async_job_id, recoverPayloa
   };
   watchLoopPayloads.set(id, entry);
   const key = watchLoopSessionKey(id);
+  const arm = () => scheduleNextProbe(id, WATCH_PROBE_INTERVAL_MS);
   void chrome.storage.session
     .set({ [key]: entry })
-    .then(() => {
-      scheduleNextProbe(id, WATCH_PROBE_INTERVAL_MS);
-      console.info('[PicPuck] WatchLoop 已开启', { async_job_id: id, firstProbeDelayMs: WATCH_PROBE_INTERVAL_MS });
-    })
+    .then(arm)
     .catch((e) => {
       console.warn('[PicPuck] watchLoop session 写入失败', id, e);
-      scheduleNextProbe(id, WATCH_PROBE_INTERVAL_MS);
-      console.info('[PicPuck] WatchLoop 已开启', { async_job_id: id, firstProbeDelayMs: WATCH_PROBE_INTERVAL_MS });
+      arm();
     });
 }
 
@@ -215,7 +151,15 @@ export function unregisterWatchLoop(async_job_id) {
 }
 
 /**
- * 熔炉 `WATCH_PROBE` / 历史 `RECOVER`：合并 payload 并延迟触发 probe。
+ * RELAY 成功回传后由编排约定点调用（设计 **11** §E、**README** R3）；默认等同 `unregisterWatchLoop`。
+ * @param {string} async_job_id
+ */
+export function notifyAsyncJobRecoverFinished(async_job_id) {
+  unregisterWatchLoop(async_job_id);
+}
+
+/**
+ * 熔炉 `WATCH_PROBE` / `RECOVER`：合并 payload 并延迟触发 probe。
  * @param {{ async_job_id: string, recoverPayload: Record<string, unknown>, callerTabId?: number }} args
  */
 export function onManualProbeRequest({ async_job_id, recoverPayload, callerTabId }) {
@@ -230,28 +174,17 @@ export function onManualProbeRequest({ async_job_id, recoverPayload, callerTabId
   if (probeRunning.get(id)) {
     manualPending.set(id, true);
     void chrome.storage.session.set({ [watchLoopSessionKey(id)]: entry }).catch(() => {});
-    console.info('[PicPuck] 检查进度 已排队', {
-      async_job_id: id,
-      detail: '当前仍有一次 RECOVER probe 在执行，本轮结束后补跑',
-    });
     return;
   }
   cancelScheduledProbe(id);
   const key = watchLoopSessionKey(id);
+  const arm = () => scheduleNextProbe(id, WATCH_MANUAL_PROBE_DELAY_MS);
   void chrome.storage.session
     .set({ [key]: entry })
-    .then(() => {
-      scheduleNextProbe(id, WATCH_MANUAL_PROBE_DELAY_MS);
-      console.info('[PicPuck] 检查进度 已排程', {
-        async_job_id: id,
-        delayMs: WATCH_MANUAL_PROBE_DELAY_MS,
-        detail: 'alarm 触发后跑 RECOVER；冷启动从 session 恢复 payload',
-      });
-    })
+    .then(arm)
     .catch((e) => {
       console.warn('[PicPuck] watchLoop session 写入失败', id, e);
-      scheduleNextProbe(id, WATCH_MANUAL_PROBE_DELAY_MS);
-      console.info('[PicPuck] 检查进度 已排程', { async_job_id: id, delayMs: WATCH_MANUAL_PROBE_DELAY_MS });
+      arm();
     });
 }
 
@@ -259,7 +192,7 @@ async function runProbeLoopEntry(asyncJobId) {
   const id = normalizeId(asyncJobId);
   await hydrateWatchLoopPayloadFromSession(id);
   if (!watchLoopPayloads.has(id)) {
-    console.warn('[PicPuck] watchLoop alarm 触发但无内存且无 session 条目 async_job_id=%s', id);
+    console.warn('[PicPuck] watchLoop alarm 触发但无条目 async_job_id=%s', id);
     return;
   }
   if (probeRunning.get(id)) {
@@ -309,20 +242,6 @@ async function runProbeInner(asyncJobId) {
   const id = normalizeId(asyncJobId);
   await hydrateWatchLoopPayloadFromSession(id);
   const entry = watchLoopPayloads.get(id);
-  // #region agent log
-  fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd9d244' },
-    body: JSON.stringify({
-      sessionId: 'd9d244',
-      location: 'asyncWatchLoopRegistry.js:runProbeInner',
-      message: 'probe inner',
-      data: { async_job_id: id, hasEntry: !!entry },
-      timestamp: Date.now(),
-      hypothesisId: 'E',
-    }),
-  }).catch(() => {});
-  // #endregion
   if (!entry) {
     console.warn('[PicPuck] watchLoop runProbeInner 无 entry async_job_id=%s', id);
     return;
@@ -338,66 +257,33 @@ async function runProbeInner(asyncJobId) {
   void chrome.storage.session.set({ [watchLoopSessionKey(id)]: entry }).catch(() => {});
 
   const payload = { ...entry.recoverPayload };
-
   const coreEng = String(payload.core_engine || '').trim();
-  if (coreEng.startsWith('jimeng_agent')) {
-    const watchTab = await tryResolveJimengWorkTabIdForProbeWatchWithRetries();
-    if (watchTab > 0) {
-      scheduleJimengProbePageWatcher({
-        workTabId: watchTab,
-        asyncJobId: id,
-        callerTabId: typeof callerTabId === 'number' ? callerTabId : 0,
-        recoverPayload: payload,
-        timing: 'beforeRecover',
-      });
-    } else {
-      console.info(
-        '[PicPuck] WatchLoop 探测前 ' +
-          PROBE_JIMENG_TAB_RESOLVE_ATTEMPTS +
-          ' 次仍未解析到组内即梦 Tab；将跑 RECOVER（allocate 可能新建 Tab），结束后按 workTabId 挂页内观测',
-        { async_job_id: id },
-      );
-    }
+  let usePageRecoverReady = false;
+  try {
+    usePageRecoverReady = resolveProfileByCoreEngine(coreEng).usePageRecoverReady === true;
+  } catch {
+    usePageRecoverReady = false;
   }
 
+  const runRecover = dispatchAsyncGenerationRecoverRef;
+  if (!runRecover) {
+    console.warn('[PicPuck] watchLoop: dispatchAsyncGenerationRecover 未注入，跳过本轮');
+    return;
+  }
   try {
-    console.info('[PicPuck] WatchLoop 即将 dispatch JIMENG_ASYNC_RECOVER', {
-      async_job_id: id,
-      callerTabId,
-    });
-    const result = await dispatchAsyncGenerationRecover(callerTabId, payload);
-    let relayed = false;
-    let notReadyOrSkipped = false;
-    if (result.ok && result.tabId > 0) {
-      const c = getContext(result.tabId);
-      const infos = (c?.logs || [])
-        .filter((e) => e && e.level === 'info')
-        .map((e) => (typeof e.message === 'string' ? e.message : ''));
-      const text = infos.join('\n');
-      relayed = text.includes('已回传生成图至熔炉页');
-      const notReady = text.includes('即梦尚未生成完成') || text.includes('本轮未就绪或无可回传图');
-      const skippedRelay =
-        text.includes('跳过图片回传') || text.includes('缺少 generationEvent') || text.includes('无图片可回传');
-      notReadyOrSkipped = notReady || skippedRelay;
-    }
-    console.info('[PicPuck] WatchLoop RECOVER 检查', {
-      async_job_id: id,
-      callerTabId,
-      ok: result.ok,
-      phase: result.phase,
-      roundId: result.roundId,
-      workTabId: result.tabId,
-      errorCode: result.errorCode,
-      relayedToForge: relayed,
-      notReadyOrSkipped,
-    });
-    if (coreEng.startsWith('jimeng_agent') && typeof result.tabId === 'number' && result.tabId > 0) {
+    const result = await runRecover(callerTabId, payload);
+    /** 成功回收后 `notifyAsyncJobRecoverFinished` 会删条目；切勿在条目已删后再挂页内 watcher */
+    if (
+      usePageRecoverReady &&
+      typeof result.tabId === 'number' &&
+      result.tabId > 0 &&
+      watchLoopPayloads.has(id)
+    ) {
       scheduleJimengProbePageWatcher({
         workTabId: result.tabId,
         asyncJobId: id,
         callerTabId: typeof callerTabId === 'number' ? callerTabId : 0,
         recoverPayload: payload,
-        timing: 'afterRecover',
       });
     }
     if (!result.ok) {
@@ -405,7 +291,7 @@ async function runProbeInner(asyncJobId) {
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error('[PicPuck] WatchLoop RECOVER probe 异常', { async_job_id: id, error: msg, e });
+    console.error('[PicPuck] WatchLoop PROBE/RELAY 异常', { async_job_id: id, error: msg });
     unregisterWatchLoop(id);
   }
 }

@@ -10,6 +10,7 @@ import {
 import { PICPUCK_ASYNC_GEN_PAGE, PICPUCK_ASYNC_GEN_RECOVER_RECEIVED } from './runtimeMessages.js';
 import { dispatchAsyncGenerationFillOnly, dispatchAsyncGenerationLaunch } from './asyncLaunchDispatch.js';
 import { onManualProbeRequest, unregisterWatchLoop } from './asyncWatchLoopRegistry.js';
+import { validateRecoverPayload } from './asyncRecoverValidators.js';
 
 const ASYNC_ID_RE = /^[a-z0-9]{12}$/;
 
@@ -33,25 +34,6 @@ function validateHandshakeFields(p, opts) {
   if (!subjectId) return '缺少 subjectId';
   if (!core_engine) return '缺少 core_engine';
   if (typeof p.input_prompt !== 'string') return '缺少 input_prompt';
-  return undefined;
-}
-
-/**
- * 即梦异步第二阶段：须含锚点（与 Step20 PATCH 写入 extension_remote_context 一致）。
- * @returns {string|undefined}
- */
-function validateJimengRecoverFields(p) {
-  const async_job_id = typeof p.async_job_id === 'string' ? p.async_job_id.trim().toLowerCase() : '';
-  if (!ASYNC_ID_RE.test(async_job_id)) return 'async_job_id 须为 12 位 [a-z0-9]';
-  const core = String(p.core_engine || '').trim();
-  if (!core.startsWith('jimeng_agent')) return 'RECOVER 当前仅支持 jimeng_agent';
-  const projectId = typeof p.projectId === 'string' ? p.projectId.trim() : '';
-  if (!projectId) return '缺少 projectId';
-  const a = p.jimengRecordAnchor;
-  if (!a || typeof a !== 'object') return '缺少 jimengRecordAnchor';
-  const dataId = typeof a.dataId === 'string' ? a.dataId.trim() : '';
-  const recordItemId = typeof a.recordItemId === 'string' ? a.recordItemId.trim() : '';
-  if (!dataId && !recordItemId) return 'jimengRecordAnchor 须含 dataId 或 recordItemId';
   return undefined;
 }
 
@@ -167,20 +149,6 @@ export async function handlePicpuckAsyncGeneration(payload, sender) {
   if (phase === 'WATCH_PROBE') {
     const async_job_id =
       typeof payload.async_job_id === 'string' ? payload.async_job_id.trim().toLowerCase() : '';
-    // #region agent log
-    fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd9d244' },
-      body: JSON.stringify({
-        sessionId: 'd9d244',
-        location: 'asyncGenerationHandlers.js:WATCH_PROBE:entry',
-        message: 'WATCH_PROBE received',
-        data: { async_job_id, tabId },
-        timestamp: Date.now(),
-        hypothesisId: 'D',
-      }),
-    }).catch(() => {});
-    // #endregion
     if (!ASYNC_ID_RE.test(async_job_id)) {
       console.warn('[PicPuck] 检查进度 拒绝', { reason: 'async_job_id 无效', async_job_id });
       return { ok: false, error: 'async_job_id 无效' };
@@ -190,22 +158,9 @@ export async function handlePicpuckAsyncGeneration(payload, sender) {
       console.warn('[PicPuck] 检查进度 拒绝', { reason: '缺少 recoverPayload', async_job_id });
       return { ok: false, error: '缺少 recoverPayload' };
     }
-    const err = validateJimengRecoverFields({ ...recoverPayload, async_job_id });
+    const coreForVal = String(recoverPayload.core_engine || '').trim();
+    const err = validateRecoverPayload(coreForVal, { ...recoverPayload, async_job_id });
     if (err) {
-      // #region agent log
-      fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd9d244' },
-        body: JSON.stringify({
-          sessionId: 'd9d244',
-          location: 'asyncGenerationHandlers.js:WATCH_PROBE:validateFail',
-          message: String(err),
-          data: { async_job_id },
-          timestamp: Date.now(),
-          hypothesisId: 'D',
-        }),
-      }).catch(() => {});
-      // #endregion
       console.warn('[PicPuck] 检查进度 拒绝', { async_job_id, error: err });
       return { ok: false, error: err };
     }
@@ -213,7 +168,7 @@ export async function handlePicpuckAsyncGeneration(payload, sender) {
       typeof payload.client_probe_id === 'string' && payload.client_probe_id.trim()
         ? payload.client_probe_id.trim()
         : undefined;
-    console.info('[PicPuck] 检查进度 已受理（将异步跑 JIMENG_ASYNC_RECOVER）', {
+    console.info('[PicPuck] 检查进度 已受理（将异步跑 PROBE→RELAY）', {
       async_job_id,
       client_probe_id,
       callerTabId: tabId,
@@ -223,27 +178,11 @@ export async function handlePicpuckAsyncGeneration(payload, sender) {
       recoverPayload: { ...recoverPayload, async_job_id },
       callerTabId: tabId,
     });
-    // #region agent log
-    fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd9d244' },
-      body: JSON.stringify({
-        sessionId: 'd9d244',
-        location: 'asyncGenerationHandlers.js:WATCH_PROBE:accepted',
-        message: 'onManualProbeRequest queued',
-        data: {
-          async_job_id,
-          hasAnchor: !!(recoverPayload.jimengRecordAnchor && typeof recoverPayload.jimengRecordAnchor === 'object'),
-        },
-        timestamp: Date.now(),
-        hypothesisId: 'D',
-      }),
-    }).catch(() => {});
-    // #endregion
     return { ok: true, asyncGenHandled: true };
   }
   if (phase === 'RECOVER') {
-    const err = validateJimengRecoverFields(payload);
+    const mergedForVal = { ...payload };
+    const err = validateRecoverPayload(String(mergedForVal.core_engine || '').trim(), mergedForVal);
     if (err) return { ok: false, error: err };
     const rest = { ...payload };
     delete rest.picpuckAsyncPhase;

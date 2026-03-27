@@ -33,23 +33,6 @@
     }
   }
 
-  // #region agent log
-  function picpuckDbgIngest(hypothesisId, loc, msg, data) {
-    fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd9d244' },
-      body: JSON.stringify({
-        sessionId: 'd9d244',
-        location: loc,
-        message: msg,
-        data: data || {},
-        timestamp: Date.now(),
-        hypothesisId: hypothesisId,
-      }),
-    }).catch(function () {});
-  }
-  // #endregion
-
   function delay(ms) {
     return new Promise(function (resolve) {
       setTimeout(resolve, ms);
@@ -1177,7 +1160,7 @@
     var stepKey = 'step15_jimeng_expand_at_mentions';
     var images = payload && Array.isArray(payload.images) ? payload.images : [];
     if (images.length === 0) {
-      appendMainLog(roundId, stepKey, 'info', 'Step15.本步跳过');
+      appendMainLog(roundId, stepKey, 'info', 'Step15.无参考图+跳过@引用占位符展开');
       return { ok: true, skipped: true };
     }
     var prompt = typeof payload.prompt === 'string' ? payload.prompt : '';
@@ -2268,7 +2251,7 @@
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step18_jimeng_submit_prompt_enter_if_configured';
     if (!payload || payload.jimengSubmitMode !== 'enter') {
-      appendMainLog(roundId, stepKey, 'info', 'Step18.本步跳过+非Enter提交模式');
+      appendMainLog(roundId, stepKey, 'info', 'Step18.非Enter提交模式+未在提示词区派发Enter');
       return { ok: true, skipped: true };
     }
     var target = findJimengPromptField();
@@ -2440,6 +2423,51 @@
     return { ok: true, n: n };
   }
 
+  var STEP21_TAB_ACTIVATE_MAX_WAIT_MS = 25000;
+  var STEP21_TAB_VISIBLE_SETTLE_MS = 400;
+
+  /**
+   * Step21 右键/剪贴板依赖前台 Tab；MAIN 无 chrome.*，经 postMessage → SW `focusWorkTab`，再等到 `visibilityState===visible`。
+   * @param {string} roundId
+   * @param {string} stepKey
+   */
+  async function ensureJimengWorkTabVisibleForStep21Collect(roundId, stepKey) {
+    if (!document.hidden && document.visibilityState === 'visible') {
+      await delay(STEP21_TAB_VISIBLE_SETTLE_MS);
+      appendMainLog(roundId, stepKey, 'info', 'Step21.info.alreadyVisibleSkipActivate');
+      return { ok: true };
+    }
+    try {
+      window.postMessage(
+        {
+          picpuckBridge: true,
+          kind: 'JIMENG_REQUEST_ACTIVATE_TAB_FOR_COLLECT',
+          roundId: roundId || '',
+        },
+        location.origin,
+      );
+    } catch (ePost) {
+      /* ignore */
+    }
+    appendMainLog(
+      roundId,
+      stepKey,
+      'info',
+      'Step21.info.requestActivateBeforeCollect hidden=' + (document.hidden ? '1' : '0'),
+    );
+    var deadline = Date.now() + STEP21_TAB_ACTIVATE_MAX_WAIT_MS;
+    while (Date.now() < deadline) {
+      if (!document.hidden && document.visibilityState === 'visible') {
+        await delay(STEP21_TAB_VISIBLE_SETTLE_MS);
+        appendMainLog(roundId, stepKey, 'info', 'Step21.info.tabVisibleSettled');
+        return { ok: true };
+      }
+      await delay(100);
+    }
+    appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+等待工作Tab置前超时');
+    return { ok: false, code: 'JIMENG_COLLECT_TAB_ACTIVATE_TIMEOUT' };
+  }
+
   /** @param {{ roundId: string, n: number }} payload */
   async function runStep21CollectImagesViaContextMenu(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
@@ -2450,7 +2478,11 @@
       appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图张数无效');
       return { ok: false, code: 'JIMENG_GENERATE_NO_OUTPUT' };
     }
-    appendMainLog(roundId, stepKey, 'info', 'Step21.进入步骤');
+    var visRes = await ensureJimengWorkTabVisibleForStep21Collect(roundId, stepKey);
+    if (!visRes || visRes.ok !== true) {
+      return visRes || { ok: false, code: 'JIMENG_COLLECT_TAB_ACTIVATE_TIMEOUT' };
+    }
+    appendMainLog(roundId, stepKey, 'info', 'Step21.开始从即梦结果区逐张复制图片+目标张数=' + n);
     var alignDeadline = Date.now() + 20000;
     var imgs0 = [];
     var root0 = null;
@@ -2623,7 +2655,7 @@
       });
       await delay(200);
     }
-    appendMainLog(roundId, stepKey, 'info', 'Step21.完成步骤+已收集张数=' + collected.length);
+    appendMainLog(roundId, stepKey, 'info', 'Step21.已从剪贴板收集即梦结果图+张数=' + collected.length);
     return { ok: true, images: collected };
   }
 
@@ -2694,13 +2726,6 @@
     if (!did && !rid) {
       return { ok: false, code: 'JIMENG_RECOVER_NO_ANCHOR' };
     }
-    // #region agent log
-    picpuckDbgIngest('H0', 'jimengImageMainWorld.js:recover:entry', 'runJimengRecoverPipeline', {
-      hasDataId: !!did,
-      hasRecordItemId: !!rid,
-      promptPreviewLen: anchor.promptPreview ? String(anchor.promptPreview).length : 0,
-    });
-    // #endregion
     var root = await awaitJimengRecoverDomReadyForObservation(roundId, stepKey, anchor);
     var dbgItemByDid = 0;
     var dbgIdElVisible = false;
@@ -2734,30 +2759,12 @@
         rootApmTotal = -1;
       }
     }
-    // #region agent log
-    picpuckDbgIngest('H1-H3', 'jimengImageMainWorld.js:recover:afterResolve', 'resolveJimengRecordRoot', {
-      rootFound: !!root,
-      dbgItemByDid: dbgItemByDid,
-      dbgIdElVisible: dbgIdElVisible,
-      docApmTotal: docApmTotal,
-      rootApmTotal: rootApmTotal,
-    });
-    // #endregion
     if (!root) {
       logRecoverDomSnapshot(recoverDomVerbose, roundId, stepKey, 'no_root', doc, null, anchor, {});
       appendMainLog(roundId, stepKey, 'info', 'Step04.即梦记录未出现在DOM');
       return { ok: true, outcome: 'not_ready' };
     }
     if (isJimengRecordGenerating(root)) {
-      // #region agent log
-      var tGen = root.textContent || '';
-      picpuckDbgIngest('H2', 'jimengImageMainWorld.js:recover:generating', 'isJimengRecordGenerating true', {
-        hasLoadingContainer: !!root.querySelector('[class*="loading-container"]'),
-        hasLoadingVideo: !!root.querySelector('video[src*="record-loading-animation"]'),
-        text_has_智能创意中: tGen.indexOf('智能创意中') !== -1,
-        text_has_pct_造梦中: /\d+%\s*造梦中/.test(tGen),
-      });
-      // #endregion
       logRecoverDomSnapshot(recoverDomVerbose, roundId, stepKey, 'still_generating', doc, root, anchor, { isGenerating: true });
       appendMainLog(roundId, stepKey, 'info', 'Step04.即梦仍在生成中');
       return { ok: true, outcome: 'not_ready' };
@@ -2779,19 +2786,6 @@
     }
     var validDecoded = listJimengResultImagesOrdered(root);
     if (n < 1) {
-      var scopeApmCount = scopeEl ? scopeEl.querySelectorAll('img[data-apm-action="ai-generated-image-record-card"]').length : 0;
-      // #region agent log
-      picpuckDbgIngest('H4', 'jimengImageMainWorld.js:recover:noSlots', 'no result slots', {
-        slotsHttpsCount: slotsHttps.length,
-        structuralN: structuralN,
-        validDecodedCount: validDecoded.length,
-        hasRecordBox: !!root.querySelector('[class*="record-box-wrapper"]'),
-        hasPostGenOps: hasJimengRecordPostGenerateOperations(root),
-        docApmTotal: docApmTotal,
-        rootApmTotal: rootApmTotal,
-        scopeApmCount: scopeApmCount,
-      });
-      // #endregion
       logRecoverDomSnapshot(recoverDomVerbose, roundId, stepKey, 'no_result_slots', doc, root, anchor, {
         slotsCount: slotsHttps.length,
         validCount: validDecoded.length,
@@ -2801,24 +2795,33 @@
       appendMainLog(roundId, stepKey, 'info', 'Step04.即梦记录上尚无结果槽位或未完成');
       return { ok: true, outcome: 'not_ready' };
     }
-    /** 后台 Tab：结构槽/卡片位可齐，但 lazy 无 https、decode 为 0；Step21 右键收集依赖已解码图，硬跑必 JIMENG_GENERATE_NO_OUTPUT */
+    /** 后台 Tab：结构槽齐但 decode 为 0；全量回收前 Step21 会请求激活 Tab。探查阶段 probeOnly 时仍报 ready，由后续 RELAY 轮聚焦再收集。 */
+    var probeOnly = !!(payload && payload.probeOnly === true);
     if (n >= 1 && validDecoded.length < 1 && document.hidden) {
+      if (!probeOnly) {
+        appendMainLog(
+          roundId,
+          stepKey,
+          'info',
+          'Step04.info.后台Tab无已解码结果图+Step21暂不执行+延后取回 structuralN=' +
+            structuralN +
+            ' httpsSlots=' +
+            slotsHttps.length,
+        );
+        logRecoverDomBrief(roundId, stepKey, 'hidden_tab_no_decoded_for_step21', doc, root, anchor, {
+          slotsCount: slotsHttps.length,
+          validCount: validDecoded.length,
+          structuralN: structuralN,
+          n: n,
+        });
+        return { ok: true, outcome: 'not_ready' };
+      }
       appendMainLog(
         roundId,
         stepKey,
         'info',
-        'Step04.info.后台Tab无已解码结果图+Step21暂不执行+延后取回 structuralN=' +
-          structuralN +
-          ' httpsSlots=' +
-          slotsHttps.length,
+        'Step04.info.probeOnly.hiddenStructuralReady structuralN=' + structuralN + ' httpsSlots=' + slotsHttps.length,
       );
-      logRecoverDomBrief(roundId, stepKey, 'hidden_tab_no_decoded_for_step21', doc, root, anchor, {
-        slotsCount: slotsHttps.length,
-        validCount: validDecoded.length,
-        structuralN: structuralN,
-        n: n,
-      });
-      return { ok: true, outcome: 'not_ready' };
     }
     logRecoverDomSnapshot(recoverDomVerbose, roundId, stepKey, 'before_step21_collect', doc, root, anchor, {
       slotsCount: slotsHttps.length,
@@ -2828,6 +2831,10 @@
       slotImgs: summarizeImgNodesForRecoverLog(slotsHttps),
       validImgs: summarizeImgNodesForRecoverLog(validDecoded),
     });
+    if (probeOnly) {
+      appendMainLog(roundId, stepKey, 'info', 'Step04.info.probeOnlyDone outcome=ready n=' + n);
+      return { ok: true, outcome: 'ready' };
+    }
     var collectPayload = {
       roundId: roundId,
       n: n,
@@ -2836,19 +2843,8 @@
     };
     var colRes = await runStep21CollectImagesViaContextMenu(collectPayload);
     if (!colRes || colRes.ok !== true) {
-      // #region agent log
-      picpuckDbgIngest('H5', 'jimengImageMainWorld.js:recover:collectFail', 'step21 collect failed', {
-        ok: !!(colRes && colRes.ok),
-        code: colRes && colRes.code ? String(colRes.code) : '',
-      });
-      // #endregion
       return colRes;
     }
-    // #region agent log
-    picpuckDbgIngest('H5', 'jimengImageMainWorld.js:recover:ready', 'recover ready', {
-      imageCount: colRes.images ? colRes.images.length : 0,
-    });
-    // #endregion
     return { ok: true, outcome: 'ready', images: colRes.images };
   }
 
@@ -2911,38 +2907,6 @@
   }
 
   /**
-   * LAUNCH 结束后工作 Tab 已无 log sink，LOG_APPEND 会被 SW 丢弃；经 CS 转发供 Service Worker console 观测（后台 Tab 无需开 DevTools）。
-   */
-  function postJimengWatcherTelemetryToSw(snap) {
-    try {
-      var slim = {
-        tick: snap.tick,
-        async_job_id: snap.async_job_id,
-        roundId: snap.roundId || '',
-        ready: !!snap.ready,
-        n: snap.n,
-        rootFound: !!snap.rootFound,
-        generating: !!snap.generating,
-        structuralN: snap.structuralN,
-        httpsSlots: snap.httpsSlots,
-        docApmTotal: snap.docApmTotal,
-        rootApmTotal: snap.rootApmTotal,
-        hidden: !!snap.hidden,
-        visibilityState: snap.visibilityState || '',
-        scopeTag: snap.scopeTag || '',
-        scopeClassTail: snap.scopeClassTail || '',
-        scopeHtmlPreview: truncateRecoverLogStr(snap.scopeHtmlSnip || '', 480),
-      };
-      window.postMessage(
-        { picpuckBridge: true, kind: 'JIMENG_WATCHER_TELEMETRY', telemetry: slim },
-        location.origin,
-      );
-    } catch (eT) {
-      /* ignore */
-    }
-  }
-
-  /**
    * document load 完成后等待 1s 首次检测；未就绪则每 5s 再测。就绪后 postMessage → 扩展触发 RECOVER。
    * @param {{ roundId?: string, async_job_id?: string, forgeCallerTabId?: number, recoverPayload?: Record<string, unknown> }} packed
    */
@@ -2982,28 +2946,9 @@
         snap.tick = tick;
         snap.async_job_id = asyncJob;
         snap.roundId = roundId;
-        postJimengWatcherTelemetryToSw(snap);
         try {
           console.log('[PicPuck][JimengRecoverWatch]', JSON.stringify(snap));
         } catch (eStr) {}
-        // #region agent log
-        picpuckDbgIngest('W1', 'jimengImageMainWorld.js:pageWatcher:tick', 'JimengRecoverWatch tick', snap);
-        // #endregion
-        appendMainLog(
-          roundId,
-          'system',
-          'debug',
-          'JimengRecoverWatch.tick=' +
-            tick +
-            ' ready=' +
-            (snap.ready ? '1' : '0') +
-            ' n=' +
-            snap.n +
-            ' root=' +
-            (snap.rootFound ? '1' : '0') +
-            ' gen=' +
-            (snap.generating ? '1' : '0'),
-        );
 
         if (stopped) break;
 

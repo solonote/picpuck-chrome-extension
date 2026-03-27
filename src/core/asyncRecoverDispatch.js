@@ -1,23 +1,22 @@
 /**
- * 启动阶段成功后串联「找回」轮次（设计 **02** 第二阶段、**14**）。
+ * 熔炉触发的异步「找回」入口：按 Profile 选 PROBE_RELAY 或 SINGLE_COMMAND（设计 **11** §B/C、**14** 批次 1）。
  */
-import { masterDispatch } from './masterDispatch.js';
-import { getCommandRecord } from './registry.js';
 import { ensureMcupExtensionAccessTokenOrThrow } from './extensionAccessTokenLifecycle.js';
+import { resolveProfileByCoreEngine } from './asyncEngineProfiles.js';
+import { runDefaultProbeThenRelay, runSingleShotRecover } from './asyncPipelineOrchestration.js';
 
 /**
  * @param {number} callerTabId 熔炉页 tabId
- * @param {Record<string, unknown>} payload 与 launch DISPATCH 相同字段（含 async_job_id）
+ * @param {Record<string, unknown>} payload 与 launch DISPATCH 相同字段（含 async_job_id、core_engine）
  */
 export async function dispatchAsyncGenerationRecover(callerTabId, payload) {
   await ensureMcupExtensionAccessTokenOrThrow();
-  const core = String(payload.core_engine || '').trim();
-  let command = '';
-  if (core.startsWith('jimeng_agent')) command = 'JIMENG_ASYNC_RECOVER';
-  else if (core.startsWith('gemini_agent')) command = 'GEMINI_ASYNC_RECOVER';
-  else throw new Error('ASYNC_BAD_CORE_ENGINE');
-  const rec = getCommandRecord(command);
-  if (!rec || !Array.isArray(rec.steps)) throw new Error('ASYNC_NO_COMMAND_RECORD');
-  const clientRequestId = crypto.randomUUID();
-  return masterDispatch(clientRequestId, command, { ...payload }, callerTabId);
+  const profile = resolveProfileByCoreEngine(String(payload.core_engine || '').trim());
+  if (profile.recoverStrategy === 'PROBE_RELAY') {
+    return runDefaultProbeThenRelay(callerTabId, payload);
+  }
+  if (profile.recoverStrategy === 'SINGLE_COMMAND') {
+    return runSingleShotRecover(callerTabId, payload);
+  }
+  throw new Error('ASYNC_BAD_RECOVER_STRATEGY');
 }

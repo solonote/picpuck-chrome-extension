@@ -4,7 +4,7 @@
  */
 import { clearRoundLogs } from './clearRoundLogs.js';
 import { attachLogSink } from './logSink.js';
-import { logStepDone, logStepEnter, logStepFail, logStepInfo } from './stepLog.js';
+import { logStepDebug, logStepFail, logStepInfo } from './stepLog.js';
 
 /** 相对扩展根目录，与 manifest / `background.js` 同级 */
 const INJECT_HELPERS_MAIN_FILE = 'src/core/injectHelpersMainWorld.js';
@@ -25,9 +25,9 @@ export async function frameworkStep01_clearRoundLogs(ctx) {
 export async function frameworkStep02_attachLogSink(ctx) {
   const { tabId, roundId } = ctx;
   const stepKey = 'step02_attach_log_sink';
-  logStepInfo(tabId, roundId, stepKey, 2, '正在绑定当前标签页日志槽');
+  logStepDebug(tabId, roundId, stepKey, 2, 'attachingLogSink');
   attachLogSink(tabId, roundId);
-  logStepInfo(tabId, roundId, stepKey, 2, '日志槽已绑定到当前轮次');
+  logStepDebug(tabId, roundId, stepKey, 2, 'logSinkBoundToRound');
 }
 
 /**
@@ -38,7 +38,7 @@ export async function frameworkStep02_attachLogSink(ctx) {
 export async function frameworkStep03_ensurePageHelpers(ctx) {
   const { tabId, roundId } = ctx;
   const stepKey = 'step03_ensure_page_helpers';
-  logStepInfo(tabId, roundId, stepKey, 3, '正在注入页内 DataURL 与粘贴辅助工具');
+  logStepDebug(tabId, roundId, stepKey, 3, 'injectingPagePasteHelpers');
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -74,5 +74,5 @@ export async function frameworkStep03_ensurePageHelpers(ctx) {
     throw new Error('PAGE_HELPERS_NOT_READY');
   }
 
-  logStepInfo(tabId, roundId, stepKey, 3, '页内工具已就绪');
+  logStepDebug(tabId, roundId, stepKey, 3, 'pagePasteHelpersReady');
 }

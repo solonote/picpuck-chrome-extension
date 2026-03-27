@@ -1,6 +1,7 @@
 /**
  * 熔炉扩展异步生成 HTTP 辅助：与 mcup-ai `POST /api/generation/event/generation-async/*` 及 Token 头对齐（**12** / **14**）。
  * `picpuckMcupExtensionAccessToken` / `picpuckMcupApiBase` 由 {@link ./extensionAccessTokenLifecycle.js} 签发与刷新。
+ * `generation-async/complete` 仅应由 {@link ./frameworkAsyncJobOutcome.js} 在 dispatchRound 成功末尾调用；agent 步骤禁止直连。
  */
 
 const TOKEN_HEADER = 'X-Extension-Access-Token';
@@ -84,6 +85,41 @@ export async function mcupPostGenerationAsyncComplete(formData) {
   if (!res.ok) {
     throw new Error(json?.detail || json?.message || `MCUP_COMPLETE_${res.status}`);
   }
+}
+
+/**
+ * 与熔炉页 `completeGenerationAsyncWithImages` 字段顺序一致（非文件 part 在前）。
+ * @param {Record<string, unknown>} ge 与 `buildJimengRelayGenerationEvent` 相同形状的 generationEvent
+ * @param {Array<{ imageBase64: string, contentType?: string }>} images
+ */
+export async function mcupPostGenerationAsyncCompleteFromJimengRelay(ge, images) {
+  if (!ge || typeof ge !== 'object') throw new Error('MCUP_ASYNC_COMPLETE_BAD_GE');
+  const aj = typeof ge.async_job_id === 'string' ? ge.async_job_id.trim().toLowerCase() : '';
+  if (!/^[a-z0-9]{12}$/.test(aj)) throw new Error('MCUP_ASYNC_COMPLETE_BAD_JOB_ID');
+  const form = new FormData();
+  form.append('async_job_id', aj);
+  form.append('outcome', 'SUCCEEDED');
+  form.append('error_message', '');
+  form.append('projectId', String(ge.projectId || '').trim());
+  form.append('subjectType', String(ge.subjectType || '').trim());
+  form.append('subjectId', String(ge.subjectId || '').trim());
+  const ip = typeof ge.inputPrompt === 'string' ? ge.inputPrompt : '';
+  if (ip) form.append('input_prompt', ip);
+  const ce = typeof ge.coreEngine === 'string' ? ge.coreEngine.trim() : '';
+  if (ce) form.append('core_engine', ce);
+  const arr = Array.isArray(images) ? images : [];
+  for (let i = 0; i < arr.length; i += 1) {
+    const it = arr[i];
+    const b64 = it && typeof it.imageBase64 === 'string' ? it.imageBase64 : '';
+    if (!b64) throw new Error('MCUP_ASYNC_COMPLETE_BAD_IMAGE');
+    const ctRaw = typeof it?.contentType === 'string' && it.contentType ? it.contentType : 'image/png';
+    const mainCt = ctRaw.split(';')[0].trim() || 'image/png';
+    const blob = await fetch(`data:${mainCt};base64,${b64}`).then((r) => r.blob());
+    const ext = mainCt.includes('jpeg') ? 'jpg' : mainCt.includes('webp') ? 'webp' : 'png';
+    const file = new File([blob], `jimeng-${i + 1}.${ext}`, { type: mainCt });
+    form.append('file', file);
+  }
+  await mcupPostGenerationAsyncComplete(form);
 }
 
 /**

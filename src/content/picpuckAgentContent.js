@@ -845,14 +845,13 @@
       removeGeminiClipboardBufferListener();
       return;
     }
-    if (d && d.picpuckBridge === true && d.kind === 'JIMENG_WATCHER_TELEMETRY' && d.telemetry) {
+    if (d && d.picpuckBridge === true && d.kind === 'JIMENG_REQUEST_ACTIVATE_TAB_FOR_COLLECT') {
       safeRuntimeSendMessage(
         {
           type: PICPUCK_COMMAND,
           payload: {
             type: PAGE_CMD,
-            action: '__picpuckJimengWatcherTelemetry',
-            telemetry: d.telemetry,
+            action: '__picpuckJimengActivateTabForCollect',
           },
         },
         () => {},

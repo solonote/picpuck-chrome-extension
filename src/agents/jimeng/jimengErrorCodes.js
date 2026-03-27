@@ -28,6 +28,8 @@ export const JIMENG_GENERATE_WAIT_TIMEOUT = 'JIMENG_GENERATE_WAIT_TIMEOUT';
 export const JIMENG_GENERATE_NO_OUTPUT = 'JIMENG_GENERATE_NO_OUTPUT';
 /** step20：槽位已出现但 loading=lazy 未全部 decode（与 valid 张数不一致） */
 export const JIMENG_RESULT_LAZY_TIMEOUT = 'JIMENG_RESULT_LAZY_TIMEOUT';
+/** step21：等待扩展将工作 Tab 置前超时（后台 Tab 无法稳定右键/剪贴板） */
+export const JIMENG_COLLECT_TAB_ACTIVATE_TIMEOUT = 'JIMENG_COLLECT_TAB_ACTIVATE_TIMEOUT';
 /** step21：右键菜单或「复制图片」不可用 */
 export const JIMENG_CONTEXT_MENU_FAILED = 'JIMENG_CONTEXT_MENU_FAILED';
 /** step21：单张 15s 内未从剪贴板读到新图 */
@@ -37,5 +39,5 @@ export {
   JIMENG_RELAY_INVALID_PAYLOAD,
   JIMENG_RELAY_SEND_FAILED,
 } from '../../core/jimengRelayErrorCodes.js';
-/** step22：兼容旧日志；回传实现见 core/relayImagePayloadChunked.js */
+/** 历史/分片 relay 错误码（即梦产出现走扩展 Token complete）；Gemini 等仍用 core/relayImagePayloadChunked.js */
 export const JIMENG_RELAY_CALLER_GONE = 'JIMENG_RELAY_CALLER_GONE';
