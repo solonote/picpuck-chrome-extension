@@ -831,6 +831,250 @@
     });
   }
 
+  function arrayBufferToBase64(buf) {
+    if (!buf || !buf.byteLength) return '';
+    var bytes = new Uint8Array(buf);
+    var chunk = 8192;
+    var binary = '';
+    for (var i = 0; i < bytes.length; i += chunk) {
+      var sub = bytes.subarray(i, i + chunk);
+      binary += String.fromCharCode.apply(null, sub);
+    }
+    return btoa(binary);
+  }
+
+  function findGeminiChatHistoryRoot() {
+    return (
+      doc.querySelector('[data-test-id="chat-history-container"]') ||
+      doc.getElementById('chat-history') ||
+      doc.querySelector('.chat-history-scroll-container')
+    );
+  }
+
+  /**
+   * 异步 LAUNCH 提交后：会话 URL（/app/{id}）+ 最后一轮 `conversation-container` 的 id。
+   * @param {{ roundId: string, captureTimeoutMs?: number }} payload
+   */
+  async function runGeminiCaptureAsyncAnchorAfterSubmit(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step12_gemini_async_capture_anchor';
+    var timeoutMs =
+      payload && typeof payload.captureTimeoutMs === 'number' && payload.captureTimeoutMs > 0
+        ? payload.captureTimeoutMs
+        : 45000;
+    var deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        var path = location.pathname || '';
+        if (path.indexOf('/app/') === 0 && path.length > 5) {
+          var hist = findGeminiChatHistoryRoot();
+          if (hist) {
+            var rows = hist.querySelectorAll('.conversation-container.message-actions-hover-boundary');
+            if (rows.length > 0) {
+              var last = rows[rows.length - 1];
+              var tid = last.id && String(last.id).trim();
+              if (tid) {
+                var convUrl = location.origin + path;
+                appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.anchor path=' + path + ' turn=' + tid);
+                return { ok: true, conversationUrl: convUrl, turnContainerId: tid };
+              }
+            }
+          }
+        }
+      } catch (e0) {
+        appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.anchorErr ' + (e0 && e0.message));
+      }
+      await delay(POLL_MS);
+    }
+    appendMainLog(roundId, stepKey, 'info', 'Step12.动作失败+捕获会话锚点超时');
+    return { ok: false, code: 'GEMINI_ASYNC_ANCHOR_TIMEOUT' };
+  }
+
+  /**
+   * 不依赖预览图 class：用 processing-state / response-footer.complete / aria-busy。
+   * @param {Element} root
+   * @returns {'processing'|'complete'|'missing'|'unknown'}
+   */
+  function geminiTurnDomCompletionState(root) {
+    if (!root) return 'missing';
+    var proc = root.querySelector('processing-state');
+    if (proc && !proc.hasAttribute('hidden')) {
+      var sec = proc.querySelector('section.processing-state_container--processing');
+      if (sec && isVisible(sec)) return 'processing';
+      var btn = proc.querySelector('button.processing-state_button--processing');
+      if (btn && isVisible(btn)) return 'processing';
+    }
+    var loose = root.querySelector('section.processing-state_container--processing');
+    if (loose && isVisible(loose)) return 'processing';
+    var footers = root.querySelectorAll('.response-footer');
+    var fi;
+    for (fi = 0; fi < footers.length; fi++) {
+      var cn = footers[fi].className && String(footers[fi].className);
+      if (cn && cn.indexOf('complete') !== -1) return 'complete';
+    }
+    var mcs = root.querySelectorAll('message-content[aria-busy]');
+    for (var mj = 0; mj < mcs.length; mj++) {
+      if (mcs[mj].getAttribute('aria-busy') === 'false') return 'complete';
+    }
+    return 'unknown';
+  }
+
+  /**
+   * @param {{ roundId: string, turnContainerId: string }} payload
+   */
+  async function runGeminiProbeTurnComplete(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var turnId = payload && payload.turnContainerId ? String(payload.turnContainerId).trim() : '';
+    var stepKey = 'step05_gemini_recover_probe';
+    if (!turnId) {
+      appendMainLog(roundId, stepKey, 'info', 'Step05.动作失败+缺少 turnContainerId');
+      return { ok: false, code: 'GEMINI_RECOVER_NO_TURN_ID' };
+    }
+    var root = doc.getElementById(turnId);
+    if (!root) {
+      appendMainLog(roundId, stepKey, 'debug', 'Step05.debug.turnNotInDom');
+      return { ok: true, outcome: 'not_ready' };
+    }
+    var st = geminiTurnDomCompletionState(root);
+    appendMainLog(roundId, stepKey, 'debug', 'Step05.debug.turnState=' + st);
+    if (st === 'complete') return { ok: true, outcome: 'ready' };
+    return { ok: true, outcome: 'not_ready' };
+  }
+
+  function findGeneratedImageHostInTurnRoot(turnRoot) {
+    if (!turnRoot) return null;
+    var ge = turnRoot.querySelector('model-response generated-image');
+    if (ge && isVisible(ge)) return ge;
+    var all = turnRoot.querySelectorAll('generated-image');
+    var i;
+    for (i = all.length - 1; i >= 0; i--) {
+      if (isVisible(all[i]) && !(all[i].closest && all[i].closest('user-query'))) return all[i];
+    }
+    return null;
+  }
+
+  /**
+   * RECOVER 用：与 Step13 一致只看预览 img，不因 `generated-image` 内残留 `div.loader`（仍占 layout）空转 60s。
+   */
+  function geminiRecoverGeneratedPreviewImageReady(ge) {
+    if (!ge) return false;
+    var img = ge.querySelector('single-image img.image, img.image');
+    if (!img) return false;
+    var ld = img.classList && img.classList.contains('loaded');
+    var nw = img.complete && img.naturalWidth > 0;
+    return !!(ld || nw);
+  }
+
+  /**
+   * 不走路由剪贴板 ARM：MAIN 独占监听 GEMINI_FULL_IMAGE_BUFFER。
+   * @param {{ roundId: string, turnContainerId: string, captureTimeoutMs?: number }} payload
+   */
+  async function runGeminiRecoverDownloadImageAsBase64(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var turnId = payload && payload.turnContainerId ? String(payload.turnContainerId).trim() : '';
+    var stepKey = 'step05_gemini_recover_collect';
+    var captureTimeoutMs =
+      payload && typeof payload.captureTimeoutMs === 'number' && payload.captureTimeoutMs > 0
+        ? payload.captureTimeoutMs
+        : 120000;
+    if (!turnId) {
+      return { ok: false, code: 'GEMINI_RECOVER_NO_TURN_ID' };
+    }
+    var cap = globalThis.__picpuckFetchCapture;
+    if (!cap || typeof cap.arm !== 'function') {
+      return { ok: false, code: 'GEMINI_FETCH_CAPTURE_MISSING' };
+    }
+    var root = doc.getElementById(turnId);
+    if (!root) {
+      return { ok: false, code: 'GEMINI_RECOVER_TURN_NOT_FOUND' };
+    }
+    var st0 = geminiTurnDomCompletionState(root);
+    if (st0 === 'processing') {
+      appendMainLog(roundId, stepKey, 'debug', 'Step05.debug.stillProcessing');
+      return { ok: false, code: 'GEMINI_RECOVER_STILL_PROCESSING' };
+    }
+    var ge = findGeneratedImageHostInTurnRoot(root);
+    if (!ge) {
+      return { ok: false, code: 'GEMINI_RECOVER_NO_GENERATED_IMAGE' };
+    }
+    var imgWait = Date.now() + 60000;
+    while (Date.now() < imgWait) {
+      if (geminiRecoverGeneratedPreviewImageReady(ge)) break;
+      await delay(POLL_MS);
+    }
+    var img2 = ge.querySelector('single-image img.image, img.image');
+    if (!img2 || !geminiRecoverGeneratedPreviewImageReady(ge)) {
+      appendMainLog(roundId, stepKey, 'info', 'Step05.动作失败+预览图未就绪');
+      return { ok: false, code: 'GEMINI_RECOVER_PREVIEW_NOT_READY' };
+    }
+    if (typeof img2.decode === 'function') {
+      try {
+        await img2.decode();
+      } catch (eD) {
+        /* ignore */
+      }
+    }
+    await delay(GEMINI_DOWNLOAD_POST_LOAD_DELAY_MS);
+    var btn = ge.querySelector('button[data-test-id="download-generated-image-button"]');
+    if (!btn) {
+      return { ok: false, code: 'GEMINI_DOWNLOAD_BUTTON_NOT_FOUND' };
+    }
+    var bufPromise = new Promise(function (resolve, reject) {
+      var t = setTimeout(function () {
+        window.removeEventListener('message', onBuf);
+        try {
+          cap.disarm();
+        } catch (e1) {
+          /* ignore */
+        }
+        reject(new Error('GEMINI_RECOVER_CAPTURE_TIMEOUT'));
+      }, captureTimeoutMs);
+      function onBuf(ev) {
+        if (ev.source !== window) return;
+        var d = ev.data;
+        if (!d || d.picpuckBridge !== true || d.kind !== 'GEMINI_FULL_IMAGE_BUFFER') return;
+        clearTimeout(t);
+        window.removeEventListener('message', onBuf);
+        var b = d._buffer;
+        if (!(b instanceof ArrayBuffer)) {
+          reject(new Error('GEMINI_RECOVER_BAD_BUFFER'));
+          return;
+        }
+        var ct = typeof d.contentType === 'string' && d.contentType ? d.contentType.split(';')[0].trim() : 'image/png';
+        resolve({ buf: b, ct: ct });
+      }
+      window.addEventListener('message', onBuf);
+    });
+    var hb = setInterval(function () {
+      appendMainLog(roundId, stepKey, 'debug', 'Step05.debug.awaitingFullImageFetch');
+    }, 12000);
+    cap.arm({
+      minByteLength: 1048576,
+      mimePrefix: 'image/',
+    });
+    btn.click();
+    try {
+      var got = await bufPromise;
+      var b64 = arrayBufferToBase64(got.buf);
+      if (!b64) {
+        cap.disarm();
+        return { ok: false, code: 'GEMINI_RECOVER_EMPTY_IMAGE' };
+      }
+      appendMainLog(roundId, stepKey, 'debug', 'Step05.debug.capturedBytes=' + got.buf.byteLength);
+      return { ok: true, images: [{ imageBase64: b64, contentType: got.ct }] };
+    } catch (e2) {
+      try {
+        cap.disarm();
+      } catch (e3) {
+        /* ignore */
+      }
+      var msg = e2 && e2.message ? String(e2.message) : String(e2);
+      return { ok: false, code: 'GEMINI_RECOVER_CAPTURE_FAILED', detail: msg };
+    } finally {
+      clearInterval(hb);
+    }
+  }
+
   /** @param {{ roundId: string, captureTimeoutMs?: number }} payload */
   async function runStep13GeminiDownloadFullImageToClipboard(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
@@ -918,6 +1162,9 @@
     runStep09GeminiFillInputAndPasteImages: runStep09GeminiFillInputAndPasteImages,
     runStep11GeminiSubmitEnterIfNeeded: runStep11GeminiSubmitEnterIfNeeded,
     runStep12GeminiWaitGeneratedImage: runStep12GeminiWaitGeneratedImage,
+    runGeminiCaptureAsyncAnchorAfterSubmit: runGeminiCaptureAsyncAnchorAfterSubmit,
+    runGeminiProbeTurnComplete: runGeminiProbeTurnComplete,
+    runGeminiRecoverDownloadImageAsBase64: runGeminiRecoverDownloadImageAsBase64,
     runStep13GeminiDownloadFullImageToClipboard: runStep13GeminiDownloadFullImageToClipboard,
   };
 })();

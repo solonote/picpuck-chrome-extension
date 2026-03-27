@@ -12,6 +12,7 @@ import {
   step09_gemini_fill_input_and_paste_images,
   step10_gemini_confirm_prompt_applied,
   step11_gemini_submit_enter_if_needed,
+  step12_gemini_async_capture_anchor_and_patch,
 } from './steps.js';
 
 registerAgentCommands([
@@ -29,6 +30,7 @@ registerAgentCommands([
       step09_gemini_fill_input_and_paste_images,
       step10_gemini_confirm_prompt_applied,
       step11_gemini_submit_enter_if_needed,
+      step12_gemini_async_capture_anchor_and_patch,
     ],
   },
 ]);
