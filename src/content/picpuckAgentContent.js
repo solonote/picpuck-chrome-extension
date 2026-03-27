@@ -858,6 +858,19 @@
       );
       return;
     }
+    if (d && d.picpuckBridge === true && d.kind === 'GEMINI_REQUEST_ACTIVATE_TAB_FOR_COLLECT') {
+      safeRuntimeSendMessage(
+        {
+          type: PICPUCK_COMMAND,
+          payload: {
+            type: PAGE_CMD,
+            action: '__picpuckGeminiActivateTabForCollect',
+          },
+        },
+        () => {},
+      );
+      return;
+    }
     if (d && d.picpuckBridge === true && d.kind === 'JIMENG_PAGE_RECOVER_READY') {
       safeRuntimeSendMessage(
         {
@@ -865,6 +878,21 @@
           payload: {
             type: PAGE_CMD,
             action: '__picpuckJimengPageRecoverReady',
+            forgeCallerTabId: d.forgeCallerTabId,
+            recoverPayload: d.recoverPayload,
+          },
+        },
+        () => {},
+      );
+      return;
+    }
+    if (d && d.picpuckBridge === true && d.kind === 'GEMINI_PAGE_RECOVER_READY') {
+      safeRuntimeSendMessage(
+        {
+          type: PICPUCK_COMMAND,
+          payload: {
+            type: PAGE_CMD,
+            action: '__picpuckGeminiPageRecoverReady',
             forgeCallerTabId: d.forgeCallerTabId,
             recoverPayload: d.recoverPayload,
           },

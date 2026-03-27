@@ -23,7 +23,7 @@ import { resolveProfileByCoreEngine } from './asyncEngineProfiles.js';
 import { flushExtensionRemoteContextIfPresent } from './flushExtensionRemoteContextIfPresent.js';
 import { submitFrameworkAsyncJobOutcomeIfPresent } from './frameworkAsyncJobOutcome.js';
 import { notifyAsyncJobRecoverFinished } from './asyncWatchLoopRegistry.js';
-import { getRecoverCheckFocusWorkTab } from './asyncRecoverTabPolicy.js';
+import { getRecoverCheckFocusWorkTab, isAsyncRecoverProbeCommand } from './asyncRecoverTabPolicy.js';
 import { applyRecoverSilentWorkTabSurface } from './recoverSilentWorkTab.js';
 /**
  * @param {{ clientRequestId: string, command: string, tabId: number, roundId: string, payload: Record<string, unknown> }} args
@@ -72,11 +72,15 @@ export async function dispatchRound(args) {
     await frameworkStep02_attachLogSink(ctx);
     await frameworkStep03_ensurePageHelpers(ctx);
 
-    /** 静默找回：新建 Tab 已在 allocateTab 内等完首屏 complete；此处为每轮检查前将工作 Tab 置为窗口内 active（不聚焦窗口）。 */
+    /** 静默找回：新建 Tab 已在 allocateTab 内等完首屏 complete；此处 `applyRecoverSilentWorkTabSurface`（不整窗 focus；已 active 则跳过，否则短暂 active 再还原）。 */
     if (rec.recoverAllocateSilentDefault === true) {
-      const wantFullFocus = await getRecoverCheckFocusWorkTab();
-      if (!wantFullFocus) {
+      if (isAsyncRecoverProbeCommand(command)) {
         await applyRecoverSilentWorkTabSurface(tabId);
+      } else {
+        const wantFullFocus = await getRecoverCheckFocusWorkTab();
+        if (!wantFullFocus) {
+          await applyRecoverSilentWorkTabSurface(tabId);
+        }
       }
     }
 

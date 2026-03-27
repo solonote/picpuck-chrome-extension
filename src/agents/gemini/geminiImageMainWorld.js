@@ -4,7 +4,10 @@
  */
 (function () {
   var g = typeof globalThis !== 'undefined' ? globalThis : window;
-  if (g.__picpuckGeminiImage) return;
+  // 同页多次注入：已有完整 watcher API 则跳过，否则重跑 bundle（扩展升级后旧页内对象缺 API）。
+  if (g.__picpuckGeminiImage && typeof g.__picpuckGeminiImage.startGeminiRecoverPageWatcher === 'function') {
+    return;
+  }
 
   var doc = document;
   var STEP_DELAY_MS = 600;
@@ -15,6 +18,10 @@
   var REF_UPLOAD_NO_SPINNER_MIN_MS = 1000;
   /** 连续多轮无上传中指示才认为稳定 */
   var REF_UPLOAD_CLEAR_TICKS = 3;
+  var GEMINI_RECOVER_TAB_ACTIVATE_MAX_WAIT_MS = 25000;
+  var GEMINI_RECOVER_TAB_VISIBLE_SETTLE_MS = 400;
+  var GEMINI_WATCH_POLL_MS = 5000;
+  var GEMINI_WATCH_MAX_TICKS_NO_FORGE = 36;
 
   function appendMainLog(roundId, step, level, message) {
     try {
@@ -863,6 +870,9 @@
         ? payload.captureTimeoutMs
         : 45000;
     var deadline = Date.now() + timeoutMs;
+    var anchorBaselineSet = false;
+    var anchorInitialRowCount = 0;
+    var anchorInitialLastId = '';
     while (Date.now() < deadline) {
       try {
         var path = location.pathname || '';
@@ -874,9 +884,26 @@
               var last = rows[rows.length - 1];
               var tid = last.id && String(last.id).trim();
               if (tid) {
+                if (!anchorBaselineSet) {
+                  anchorBaselineSet = true;
+                  anchorInitialRowCount = rows.length;
+                  anchorInitialLastId = tid;
+                }
+                var stTurn = geminiTurnDomCompletionState(last);
+                var grew = rows.length > anchorInitialRowCount;
+                var lastChanged = tid !== anchorInitialLastId;
+                var notComplete = stTurn !== 'complete';
+                if (!(grew || lastChanged || notComplete)) {
+                  await delay(POLL_MS);
+                  continue;
+                }
                 var convUrl = location.origin + path;
                 appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.anchor path=' + path + ' turn=' + tid);
-                return { ok: true, conversationUrl: convUrl, turnContainerId: tid };
+                return {
+                  ok: true,
+                  conversationUrl: convUrl,
+                  turnContainerId: tid,
+                };
               }
             }
           }
@@ -891,7 +918,38 @@
   }
 
   /**
-   * 不依赖预览图 class：用 processing-state / response-footer.complete / aria-busy。
+   * 单条 model-response 的完成态（不扫 user-query，避免用户区误报）。
+   * @param {Element} mr
+   * @returns {'processing'|'complete'|'unknown'}
+   */
+  function geminiSingleModelResponseCompletionState(mr) {
+    if (!mr) return 'unknown';
+    var p = mr.querySelector('processing-state');
+    if (p && !p.hasAttribute('hidden')) {
+      var sec = p.querySelector('section.processing-state_container--processing');
+      if (sec && isVisible(sec)) return 'processing';
+      var btn = p.querySelector('button.processing-state_button--processing');
+      if (btn && isVisible(btn)) return 'processing';
+    }
+    var loose = mr.querySelector('section.processing-state_container--processing');
+    if (loose && isVisible(loose)) return 'processing';
+    var footers = mr.querySelectorAll('.response-footer');
+    var fi;
+    for (fi = 0; fi < footers.length; fi++) {
+      var cn = footers[fi].className && String(footers[fi].className);
+      if (cn && cn.indexOf('complete') !== -1) return 'complete';
+    }
+    var mcs = mr.querySelectorAll('message-content[aria-busy]');
+    for (var mj = 0; mj < mcs.length; mj++) {
+      if (mcs[mj].getAttribute('aria-busy') === 'false') return 'complete';
+    }
+    return 'unknown';
+  }
+
+  /**
+   * 一轮 = `.conversation-container`：内含 user-query + 一条或多条 model-response。
+   * 整轮 complete 当且仅当「该容器内每一条 model-response」均 complete；任一条 processing → 整轮 processing；
+   * 无 model-response 或存在尚未 complete 也非 processing → unknown。
    * @param {Element} root
    * @returns {'processing'|'complete'|'missing'|'unknown'}
    */
@@ -906,17 +964,20 @@
     }
     var loose = root.querySelector('section.processing-state_container--processing');
     if (loose && isVisible(loose)) return 'processing';
-    var footers = root.querySelectorAll('.response-footer');
-    var fi;
-    for (fi = 0; fi < footers.length; fi++) {
-      var cn = footers[fi].className && String(footers[fi].className);
-      if (cn && cn.indexOf('complete') !== -1) return 'complete';
+    var mrs = root.querySelectorAll('model-response');
+    if (!mrs.length) return 'unknown';
+    var states = [];
+    var i;
+    for (i = 0; i < mrs.length; i += 1) {
+      states.push(geminiSingleModelResponseCompletionState(mrs[i]));
     }
-    var mcs = root.querySelectorAll('message-content[aria-busy]');
-    for (var mj = 0; mj < mcs.length; mj++) {
-      if (mcs[mj].getAttribute('aria-busy') === 'false') return 'complete';
+    for (i = 0; i < states.length; i += 1) {
+      if (states[i] === 'processing') return 'processing';
     }
-    return 'unknown';
+    for (i = 0; i < states.length; i += 1) {
+      if (states[i] !== 'complete') return 'unknown';
+    }
+    return 'complete';
   }
 
   /**
@@ -941,16 +1002,39 @@
     return { ok: true, outcome: 'not_ready' };
   }
 
+  /**
+   * @returns {{ el: Element|null, pickIndex: number, total: number }}
+   */
   function findGeneratedImageHostInTurnRoot(turnRoot) {
-    if (!turnRoot) return null;
-    var ge = turnRoot.querySelector('model-response generated-image');
-    if (ge && isVisible(ge)) return ge;
+    if (!turnRoot) return { el: null, pickIndex: -1, total: 0 };
     var all = turnRoot.querySelectorAll('generated-image');
-    var i;
-    for (i = all.length - 1; i >= 0; i--) {
-      if (isVisible(all[i]) && !(all[i].closest && all[i].closest('user-query'))) return all[i];
+    var total = all.length;
+    var mrs = turnRoot.querySelectorAll('model-response');
+    var mi;
+    for (mi = mrs.length - 1; mi >= 0; mi -= 1) {
+      var imgs = mrs[mi].querySelectorAll('generated-image');
+      var ji;
+      for (ji = imgs.length - 1; ji >= 0; ji -= 1) {
+        var cand = imgs[ji];
+        if (isVisible(cand)) {
+          var pickIndex = -1;
+          for (var ix = 0; ix < all.length; ix += 1) {
+            if (all[ix] === cand) {
+              pickIndex = ix;
+              break;
+            }
+          }
+          return { el: cand, pickIndex: pickIndex, total: total };
+        }
+      }
     }
-    return null;
+    var i;
+    for (i = all.length - 1; i >= 0; i -= 1) {
+      if (isVisible(all[i]) && !(all[i].closest && all[i].closest('user-query'))) {
+        return { el: all[i], pickIndex: i, total: total };
+      }
+    }
+    return { el: null, pickIndex: -1, total: total };
   }
 
   /**
@@ -963,6 +1047,48 @@
     var ld = img.classList && img.classList.contains('loaded');
     var nw = img.complete && img.naturalWidth > 0;
     return !!(ld || nw);
+  }
+
+  /**
+   * RELAY 取全图 fetch 前需前台 Tab；与即梦 Step21 同路径：postMessage → CS → SW `focusWorkTab`，再等 `visibilityState===visible`。
+   * @param {string} roundId
+   * @param {string} stepKey
+   */
+  async function ensureGeminiWorkTabVisibleForRecoverCollect(roundId, stepKey) {
+    if (!document.hidden && document.visibilityState === 'visible') {
+      await delay(GEMINI_RECOVER_TAB_VISIBLE_SETTLE_MS);
+      appendMainLog(roundId, stepKey, 'info', 'Step05.info.alreadyVisibleSkipActivate');
+      return { ok: true };
+    }
+    try {
+      window.postMessage(
+        {
+          picpuckBridge: true,
+          kind: 'GEMINI_REQUEST_ACTIVATE_TAB_FOR_COLLECT',
+          roundId: roundId || '',
+        },
+        location.origin,
+      );
+    } catch (ePost) {
+      /* ignore */
+    }
+    appendMainLog(
+      roundId,
+      stepKey,
+      'info',
+      'Step05.info.requestActivateBeforeCollect hidden=' + (document.hidden ? '1' : '0'),
+    );
+    var deadline = Date.now() + GEMINI_RECOVER_TAB_ACTIVATE_MAX_WAIT_MS;
+    while (Date.now() < deadline) {
+      if (!document.hidden && document.visibilityState === 'visible') {
+        await delay(GEMINI_RECOVER_TAB_VISIBLE_SETTLE_MS);
+        appendMainLog(roundId, stepKey, 'info', 'Step05.info.tabVisibleSettled');
+        return { ok: true };
+      }
+      await delay(100);
+    }
+    appendMainLog(roundId, stepKey, 'info', 'Step05.动作失败+等待工作Tab置前超时');
+    return { ok: false, code: 'GEMINI_RECOVER_TAB_ACTIVATE_TIMEOUT' };
   }
 
   /**
@@ -993,7 +1119,8 @@
       appendMainLog(roundId, stepKey, 'debug', 'Step05.debug.stillProcessing');
       return { ok: false, code: 'GEMINI_RECOVER_STILL_PROCESSING' };
     }
-    var ge = findGeneratedImageHostInTurnRoot(root);
+    var pick = findGeneratedImageHostInTurnRoot(root);
+    var ge = pick.el;
     if (!ge) {
       return { ok: false, code: 'GEMINI_RECOVER_NO_GENERATED_IMAGE' };
     }
@@ -1015,6 +1142,10 @@
       }
     }
     await delay(GEMINI_DOWNLOAD_POST_LOAD_DELAY_MS);
+    var visRes = await ensureGeminiWorkTabVisibleForRecoverCollect(roundId, stepKey);
+    if (!visRes || visRes.ok !== true) {
+      return visRes || { ok: false, code: 'GEMINI_RECOVER_TAB_ACTIVATE_TIMEOUT' };
+    }
     var btn = ge.querySelector('button[data-test-id="download-generated-image-button"]');
     if (!btn) {
       return { ok: false, code: 'GEMINI_DOWNLOAD_BUTTON_NOT_FOUND' };
@@ -1073,6 +1204,106 @@
     } finally {
       clearInterval(hb);
     }
+  }
+
+  /**
+   * document load 后 1s 首次检测；未 complete 则每 5s 再测。就绪后 postMessage → 扩展触发 PROBE→RELAY（对齐即梦 JimengRecoverWatch）。
+   * @param {{ roundId?: string, async_job_id?: string, forgeCallerTabId?: number, recoverPayload?: object }} packed
+   */
+  function startGeminiRecoverPageWatcher(packed) {
+    var prevStop = g.__picpuckGeminiRecoverWatcherStop;
+    if (typeof prevStop === 'function') {
+      try {
+        prevStop();
+      } catch (ePrev) {
+        /* ignore */
+      }
+    }
+    var stopped = false;
+    g.__picpuckGeminiRecoverWatcherStop = function () {
+      stopped = true;
+    };
+    var rp = packed && packed.recoverPayload;
+    var turnId =
+      rp && typeof rp.geminiTurnContainerId === 'string' ? String(rp.geminiTurnContainerId).trim() : '';
+    var roundId = packed && packed.roundId ? String(packed.roundId) : '';
+    var asyncJob = packed && packed.async_job_id ? String(packed.async_job_id) : '';
+    var forgeTab = packed && typeof packed.forgeCallerTabId === 'number' ? packed.forgeCallerTabId : 0;
+
+    (async function watcherMain() {
+      async function waitDomSettledPlus1s() {
+        if (document.readyState !== 'complete') {
+          await new Promise(function (resolve) {
+            window.addEventListener('load', resolve, { once: true });
+          });
+        }
+        await delay(1000);
+      }
+
+      await waitDomSettledPlus1s();
+
+      var tick = 0;
+      while (!stopped) {
+        tick += 1;
+        var root = turnId ? doc.getElementById(turnId) : null;
+        var st = geminiTurnDomCompletionState(root);
+        try {
+          console.log(
+            '[PicPuck][GeminiRecoverWatch]',
+            JSON.stringify({
+              tick: tick,
+              async_job_id: asyncJob,
+              turnState: st,
+              turnInDom: !!root,
+            }),
+          );
+        } catch (eStr) {
+          /* ignore */
+        }
+
+        if (stopped) break;
+
+        if (st === 'complete' && forgeTab > 0) {
+          var basePayload = rp && typeof rp === 'object' ? rp : {};
+          var mergedPayload = {};
+          var k;
+          for (k in basePayload) {
+            if (Object.prototype.hasOwnProperty.call(basePayload, k)) {
+              mergedPayload[k] = basePayload[k];
+            }
+          }
+          try {
+            window.postMessage(
+              {
+                picpuckBridge: true,
+                kind: 'GEMINI_PAGE_RECOVER_READY',
+                forgeCallerTabId: forgeTab,
+                recoverPayload: mergedPayload,
+              },
+              location.origin,
+            );
+          } catch (ePm) {
+            /* ignore */
+          }
+          appendMainLog(roundId, 'system', 'info', 'GeminiRecoverWatch.firedRecover async_job_id=' + asyncJob);
+          stopped = true;
+          break;
+        }
+
+        if (forgeTab <= 0 && tick >= GEMINI_WATCH_MAX_TICKS_NO_FORGE) {
+          appendMainLog(
+            roundId,
+            'system',
+            'info',
+            'GeminiRecoverWatch.stopped_no_forgeCallerTabId ticks=' + tick,
+          );
+          stopped = true;
+          break;
+        }
+
+        await delay(GEMINI_WATCH_POLL_MS);
+      }
+    })();
   }
 
   /** @param {{ roundId: string, captureTimeoutMs?: number }} payload */
@@ -1157,6 +1388,7 @@
   }
 
   g.__picpuckGeminiImage = {
+    startGeminiRecoverPageWatcher: startGeminiRecoverPageWatcher,
     runStep06GeminiEnsureMakeImageEntry: runStep06GeminiEnsureMakeImageEntry,
     runStep08GeminiEnsureBardMode: runStep08GeminiEnsureBardMode,
     runStep09GeminiFillInputAndPasteImages: runStep09GeminiFillInputAndPasteImages,

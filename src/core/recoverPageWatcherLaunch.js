@@ -1,7 +1,16 @@
 /**
- * 异步找回：在工作 Tab 的 MAIN 世界挂「结果区就绪」观测（当前由即梦页内脚本实现；须放 core 因 SW 禁止 import()）。
+ * 异步找回：在工作 Tab 的 MAIN 挂「结果就绪」观测；按 `recoverPayload.core_engine` 注入对应站点 bundle（须放 core 因 SW 禁止 import()）。
  */
 const JIMENG_IMAGE_MAIN_WORLD_FILE = 'src/agents/jimeng/jimengImageMainWorld.js';
+const GEMINI_IMAGE_MAIN_WORLD_FILE = 'src/agents/gemini/geminiImageMainWorld.js';
+
+/**
+ * @param {Record<string, unknown>|undefined} recoverPayload
+ */
+function isGeminiRecoverEngine(recoverPayload) {
+  const core = recoverPayload && typeof recoverPayload.core_engine === 'string' ? recoverPayload.core_engine.trim() : '';
+  return core.startsWith('gemini_agent');
+}
 
 /**
  * @param {{
@@ -24,11 +33,13 @@ export async function startRecoverPageWatcherFromLaunch(args) {
     forgeCallerTabId,
     recoverPayload: args.recoverPayload && typeof args.recoverPayload === 'object' ? args.recoverPayload : {},
   };
+  const gemini = isGeminiRecoverEngine(packed.recoverPayload);
+  const file = gemini ? GEMINI_IMAGE_MAIN_WORLD_FILE : JIMENG_IMAGE_MAIN_WORLD_FILE;
   try {
     await chrome.scripting.executeScript({
       target: { tabId: workTabId },
       world: 'MAIN',
-      files: [JIMENG_IMAGE_MAIN_WORLD_FILE],
+      files: [file],
     });
   } catch (e) {
     console.warn('[PicPuck] recover page watcher: inject MAIN failed', e);
@@ -38,9 +49,24 @@ export async function startRecoverPageWatcherFromLaunch(args) {
     const [startRes] = await chrome.scripting.executeScript({
       target: { tabId: workTabId },
       world: 'MAIN',
-      func: (p) => {
-        const g = typeof globalThis !== 'undefined' ? globalThis : window;
-        const inj = g.__picpuckJimengImage;
+      func: (p, useGemini) => {
+        const gl = typeof globalThis !== 'undefined' ? globalThis : window;
+        if (useGemini) {
+          const inj = gl.__picpuckGeminiImage;
+          if (inj && typeof inj.startGeminiRecoverPageWatcher === 'function') {
+            inj.startGeminiRecoverPageWatcher(p);
+            return { ok: true };
+          }
+          try {
+            console.warn(
+              '[PicPuck] recover page watcher: MAIN 缺少 startGeminiRecoverPageWatcher（注入被跳过或扩展未更新）',
+            );
+          } catch {
+            /* ignore */
+          }
+          return { ok: false, code: 'RECOVER_PAGE_WATCHER_GEMINI_MISSING' };
+        }
+        const inj = gl.__picpuckJimengImage;
         if (inj && typeof inj.startJimengRecoverPageWatcher === 'function') {
           inj.startJimengRecoverPageWatcher(p);
           return { ok: true };
@@ -52,9 +78,9 @@ export async function startRecoverPageWatcherFromLaunch(args) {
         } catch {
           /* ignore */
         }
-        return { ok: false, code: 'RECOVER_PAGE_WATCHER_API_MISSING' };
+        return { ok: false, code: 'RECOVER_PAGE_WATCHER_JIMENG_MISSING' };
       },
-      args: [packed],
+      args: [packed, gemini],
     });
     const sr = startRes && startRes.result;
     if (!sr || sr.ok !== true) {

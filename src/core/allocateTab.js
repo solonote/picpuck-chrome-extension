@@ -1,7 +1,7 @@
 /**
  * §9.4 allocateTab(command)：每次请求全量 `tabs.query`（§9.2）→ 按站点 `homeUrl` 前缀筛候选 → **再**筛 PicPuck 蓝组内 Tab（见 `picpuckWorkspaceTabGroup`）→
  * 按 tab.id 升序尝试 §9.3 原子抢占；无 idle 则 `tabs.create` 并入 PicPuck 组后再 `waitForTabUrlPrefix` 与抢占。
- * `CommandRecord.recoverAllocateSilentDefault` 为 true 时：由 `getRecoverCheckFocusWorkTab()` 决定；未设或 `false` 则不在此聚焦窗口，静默「窗口内 active」由 `dispatchRound` 在框架 step03 之后执行（见 `recoverSilentWorkTab.js`）；`picpuckRecoverCheckFocusTab===true` 时此处仍走完整 `focusWorkTab`。
+ * `recoverAllocateSilentDefault` 为 true 时：`*_ASYNC_PROBE` 恒不在此聚焦窗口；`*_ASYNC_RELAY` 由 `getRecoverCheckFocusWorkTab()`（sync `picpuckRecoverCheckFocusTab`）决定。静默时 `dispatchRound` step03 后 `applyRecoverSilentWorkTabSurface`（已 active 则跳过；否则短暂 active 再还原，见 `recoverSilentWorkTab.js`）。RELAY 取回前可由 MAIN 再请求 `focusWorkTab`。
  */
 import { getCommandRecord } from './registry.js';
 import { injectableAcquireExecSlot } from './execSlot/injectableAcquireExecSlot.js';
@@ -10,7 +10,7 @@ import {
   ensureTabInPicpuckWorkspaceGroup,
   filterPicpuckWorkspaceCandidates,
 } from './picpuckWorkspaceTabGroup.js';
-import { getRecoverCheckFocusWorkTab } from './asyncRecoverTabPolicy.js';
+import { getRecoverCheckFocusWorkTab, isAsyncRecoverProbeCommand } from './asyncRecoverTabPolicy.js';
 
 /** @typedef {{ ok: true, tabId: number }} AllocateTabOk */
 /** @typedef {{ ok: false, errorCode: string, message?: string }} AllocateTabFail */
@@ -29,10 +29,12 @@ export async function allocateTab(command) {
     return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'invalid CommandRecord urls' };
   }
 
-  /** 异步找回 allocate 阶段：默认静默，由 `getRecoverCheckFocusWorkTab`（sync `picpuckRecoverCheckFocusTab`）决定是否激活；未设 false。Step04 内另有一次 focus 保证 recover 前 DOM 挂载。 */
+  /** 异步找回 allocate：`*_ASYNC_PROBE` 恒不聚焦窗口；`*_ASYNC_RELAY` 由 sync `picpuckRecoverCheckFocusTab` 决定。Step04 内另有一次 focus 保证 recover 前 DOM 挂载。 */
   let focusAfterAllocate = true;
   if (rec.recoverAllocateSilentDefault === true) {
-    focusAfterAllocate = await getRecoverCheckFocusWorkTab();
+    focusAfterAllocate = isAsyncRecoverProbeCommand(command)
+      ? false
+      : await getRecoverCheckFocusWorkTab();
   }
 
   const all = await chrome.tabs.query({});

@@ -61,8 +61,8 @@ const PROFILES = [
     parseProbeOutcome: (result) =>
       result.probeOutcome === 'ready' ? 'ready' : String(result.probeOutcome || 'not_ready'),
     registerWatchLoopOnLaunchSuccess: true,
-    startRecoverPageWatcherOnLaunchSuccess: false,
-    injectRecoverPageWatcherAfterProbe: false,
+    startRecoverPageWatcherOnLaunchSuccess: true,
+    injectRecoverPageWatcherAfterProbe: true,
     keepWatchLoopAfterRelaySuccess: false,
     defaultSubmitModeForLaunch: null,
     hasLaunchAnchor(ctx) {

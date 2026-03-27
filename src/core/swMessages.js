@@ -304,8 +304,11 @@ export function installRuntimeMessageHandlers() {
         return true;
       }
 
-      /** 即梦：Step21 收集前 MAIN 请求将本 Tab 置前并聚焦窗口（后台时右键/剪贴板不可靠） */
-      if (payload.action === '__picpuckJimengActivateTabForCollect') {
+      /** 即梦 Step21 / Gemini RELAY 取全图：收集前 MAIN 请求将本 Tab 置前并聚焦窗口（后台时点击/fetch 不可靠） */
+      if (
+        payload.action === '__picpuckJimengActivateTabForCollect' ||
+        payload.action === '__picpuckGeminiActivateTabForCollect'
+      ) {
         const tabId = sender.tab?.id;
         if (tabId == null) {
           sendResponse({ ok: false, error: 'no tab' });
@@ -323,8 +326,11 @@ export function installRuntimeMessageHandlers() {
         return true;
       }
 
-      /** 即梦：目标页 MAIN watcher 判定结果区就绪 → CS → 本处触发 PROBE→RELAY（熔炉 Tab） */
-      if (payload.action === '__picpuckJimengPageRecoverReady') {
+      /** 即梦 / Gemini：目标页 MAIN watcher 就绪 → CS → 本处触发 PROBE→RELAY（熔炉 Tab） */
+      if (
+        payload.action === '__picpuckJimengPageRecoverReady' ||
+        payload.action === '__picpuckGeminiPageRecoverReady'
+      ) {
         (async () => {
           try {
             const forgeTabId =
@@ -334,7 +340,7 @@ export function installRuntimeMessageHandlers() {
             const recoverPayload =
               payload.recoverPayload && typeof payload.recoverPayload === 'object' ? payload.recoverPayload : null;
             if (forgeTabId <= 0 || !recoverPayload) {
-              sendResponse({ ok: false, error: 'bad_jimeng_page_recover_ready' });
+              sendResponse({ ok: false, error: 'bad_page_recover_ready' });
               return;
             }
             await dispatchAsyncGenerationRecover(forgeTabId, recoverPayload);
