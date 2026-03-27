@@ -99,8 +99,10 @@ export async function allocateTab(command) {
  * @param {number} tabId
  */
 export async function activateWorkTabWithoutFocusingWindow(tabId) {
+  console.info('[PicPuck] activateWorkTabWithoutFocusingWindow 执行前', { tabId });
   try {
     await chrome.tabs.update(tabId, { active: true });
+    console.info('[PicPuck] activateWorkTabWithoutFocusingWindow 执行后（tabs.update 已成功）', { tabId });
   } catch (e) {
     console.warn('[PicPuck] activateWorkTabWithoutFocusingWindow failed tab=%d', tabId, e);
   }
