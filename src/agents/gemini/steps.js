@@ -48,6 +48,78 @@ function payloadGenerationEvent(payload) {
   return out;
 }
 
+const GEMINI_ASYNC_JOB_ID_RE = /^[a-z0-9]{12}$/;
+
+function generationEventFieldStringGe(ge, k) {
+  if (!ge || typeof ge !== 'object') return '';
+  const v = ge[k];
+  if (v == null) return '';
+  if (typeof v === 'string') return v.trim();
+  if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+  return String(v).trim();
+}
+
+/** 与即梦 recover 一致：嵌套 generationEvent 或扁平 handshake 字段 */
+function geminiRecoverGenerationEventComplete(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  const ge = payload.generationEvent;
+  if (ge && typeof ge === 'object') {
+    const s = (k) => generationEventFieldStringGe(ge, k);
+    return !!(s('projectId') && s('subjectType') && s('subjectId') && s('inputPrompt') && s('coreEngine'));
+  }
+  const pid = typeof payload.projectId === 'string' ? payload.projectId.trim() : '';
+  const st = typeof payload.subjectType === 'string' ? payload.subjectType.trim() : '';
+  const sid = typeof payload.subjectId === 'string' ? payload.subjectId.trim() : '';
+  const core = String(payload.core_engine || '').trim();
+  const ip = payload.input_prompt;
+  if (ip != null && typeof ip !== 'string') return false;
+  return !!(pid && st && sid && core);
+}
+
+function normalizeGeminiConversationUrlForCompare(url) {
+  const s = String(url || '').trim();
+  try {
+    const u = new URL(s);
+    return u.origin + u.pathname;
+  } catch {
+    return s.replace(/\?[#].*$/, '').replace(/\?.*$/, '');
+  }
+}
+
+function buildGeminiRelayGenerationEvent(payload, ctx) {
+  /** @type {Record<string, unknown>} */
+  let ge = {};
+  if (payload && payload.generationEvent && typeof payload.generationEvent === 'object') {
+    ge = { ...payload.generationEvent };
+  } else if (payload && typeof payload === 'object') {
+    const ip = payload.input_prompt;
+    ge = {
+      projectId: typeof payload.projectId === 'string' ? payload.projectId.trim() : '',
+      subjectType: typeof payload.subjectType === 'string' ? payload.subjectType.trim() : '',
+      subjectId: typeof payload.subjectId === 'string' ? payload.subjectId.trim() : '',
+      inputPrompt: typeof ip === 'string' ? ip : '',
+      coreEngine: String(payload.core_engine || '').trim(),
+    };
+  }
+  const ga = ctx && ctx.geminiAsyncAnchor;
+  const urlFromPayload =
+    payload && typeof payload.geminiConversationUrl === 'string' ? payload.geminiConversationUrl.trim() : '';
+  const tidFromPayload =
+    payload && typeof payload.geminiTurnContainerId === 'string' ? payload.geminiTurnContainerId.trim() : '';
+  const convUrl =
+    (ga && typeof ga.conversationUrl === 'string' && ga.conversationUrl.trim()) || urlFromPayload;
+  const turnId =
+    (ga && typeof ga.turnContainerId === 'string' && ga.turnContainerId.trim()) || tidFromPayload;
+  if (convUrl) ge.gemini_conversation_url = convUrl;
+  if (turnId) ge.gemini_turn_container_id = turnId;
+  const ajFlat =
+    payload && typeof payload.async_job_id === 'string' ? payload.async_job_id.trim().toLowerCase() : '';
+  if (GEMINI_ASYNC_JOB_ID_RE.test(ajFlat)) {
+    ge.async_job_id = ajFlat;
+  }
+  return ge;
+}
+
 function normalizeAspectRatioId(raw) {
   if (raw == null || !String(raw).trim()) return '16:9';
   const s = String(raw)
@@ -130,6 +202,49 @@ async function execGeminiMainRunner(ctx, opts) {
     throw new Error(code);
   }
   logStepDone(tabId, roundId, stepKey, nn, doneMsg);
+}
+
+/**
+ * 与 {@link execGeminiMainRunner} 相同注入与调用，返回 MAIN 结果对象（不包一层 ok 抛错前的解析）。
+ * @param {object} ctx
+ * @param {{ nn: number, stepKey: string, runnerName: string, mainPayload: Record<string, unknown>, failUserMsg: string, startMsg: string, doneMsg: string, allFrames?: boolean }} opts
+ */
+async function execGeminiMainRunnerReturn(ctx, opts) {
+  const { tabId, roundId } = ctx;
+  const { nn, stepKey, runnerName, mainPayload, failUserMsg, startMsg, doneMsg, allFrames } = opts;
+  const useAllFrames = !!allFrames;
+  logStepEnter(tabId, roundId, stepKey, nn, startMsg);
+  try {
+    await ensureGeminiImageMainWorldInjected(tabId, useAllFrames);
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    logStepFail(tabId, roundId, stepKey, nn, '动作失败+页内 Gemini 脚本注入失败请刷新页面后重试', m.slice(0, 500));
+    throw new Error(GEMINI_IMAGE_MAIN_INJECT_FAILED);
+  }
+  const mergedPayload = { roundId, ...mainPayload };
+  const target = useAllFrames ? { tabId, allFrames: true } : { tabId };
+  const results = await chrome.scripting.executeScript({
+    target,
+    world: 'MAIN',
+    func: async (packed) => {
+      const gl = typeof globalThis !== 'undefined' ? globalThis : window;
+      const inj = gl.__picpuckGeminiImage;
+      if (!inj || typeof inj[packed.runnerName] !== 'function') {
+        return { ok: false, code: 'GEMINI_IMAGE_MAIN_INJECT_FAILED' };
+      }
+      return inj[packed.runnerName](packed.payload);
+    },
+    args: [{ runnerName, payload: mergedPayload }],
+  });
+  const r = pickGeminiMainResult(results);
+  if (!r || r.ok !== true) {
+    const code = r && r.code ? String(r.code) : GEMINI_UI_NOT_READY;
+    const detail = r && typeof r.detail === 'string' ? r.detail : '';
+    logStepFail(tabId, roundId, stepKey, nn, failUserMsg, (detail || code).slice(0, 500));
+    throw new Error(code);
+  }
+  logStepDone(tabId, roundId, stepKey, nn, doneMsg);
+  return r;
 }
 
 /**
@@ -349,4 +464,152 @@ export async function step13_gemini_download_full_image_to_clipboard(ctx) {
     startMsg: '点击整图下载拦截响应并写入系统剪贴板',
     doneMsg: '整图已写入系统剪贴板',
   });
+}
+
+/** GEMINI_ASYNC_LAUNCH：提交后捕获 `/app/{id}` + 末轮 `conversation-container` id 并 PATCH 后端。 */
+export async function step12_gemini_async_capture_anchor_and_patch(ctx) {
+  const { tabId, roundId, payload, command } = ctx;
+  const stepKey = 'step12_gemini_async_capture_anchor';
+  if (command !== 'GEMINI_ASYNC_LAUNCH') {
+    return;
+  }
+  const aj =
+    payload && typeof payload.async_job_id === 'string' ? payload.async_job_id.trim().toLowerCase() : '';
+  if (!GEMINI_ASYNC_JOB_ID_RE.test(aj)) {
+    logStepInfo(tabId, roundId, stepKey, 12, '无异步任务 id+跳过会话锚点');
+    return;
+  }
+  const projectId = String(payload.projectId || '').trim();
+  if (!projectId) {
+    logStepFail(tabId, roundId, stepKey, 12, '动作失败+缺少 projectId 无法同步锚点', '');
+    throw new Error('GEMINI_ASYNC_NO_PROJECT');
+  }
+  const r = await execGeminiMainRunnerReturn(ctx, {
+    nn: 12,
+    stepKey,
+    runnerName: 'runGeminiCaptureAsyncAnchorAfterSubmit',
+    mainPayload: { captureTimeoutMs: 45000 },
+    failUserMsg: '动作失败+捕获 Gemini 会话锚点超时',
+    startMsg: '捕获当前会话 URL 与末轮对话块 id',
+    doneMsg: '已捕获会话锚点',
+  });
+  const conversationUrl =
+    r && typeof r.conversationUrl === 'string' ? r.conversationUrl.trim() : '';
+  const turnContainerId =
+    r && typeof r.turnContainerId === 'string' ? r.turnContainerId.trim() : '';
+  if (!conversationUrl || !turnContainerId) {
+    logStepFail(tabId, roundId, stepKey, 12, '动作失败+页内未返回有效锚点', '');
+    throw new Error('GEMINI_ASYNC_ANCHOR_INVALID');
+  }
+  ctx.geminiAsyncAnchor = { conversationUrl, turnContainerId };
+  logStepEnter(tabId, roundId, stepKey, 12, '组好 extension_remote_context 供框架 PATCH');
+  /** 由 `flushExtensionRemoteContextIfPresent` 在本轮步骤结束后统一 PATCH */
+  ctx.pendingExtensionRemoteContext = JSON.stringify({
+    geminiConversationUrl: conversationUrl,
+    geminiTurnContainerId: turnContainerId,
+  });
+  logStepDone(tabId, roundId, stepKey, 12, '已交框架同步远程上下文');
+}
+
+/** PROBE/RELAY：导航至找回载荷中的会话 URL（不含 query 差异则跳过跳转）。 */
+export async function step04_gemini_recover_ensure_conversation(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step04_gemini_recover_nav';
+  const targetRaw = typeof payload.geminiConversationUrl === 'string' ? payload.geminiConversationUrl.trim() : '';
+  if (!targetRaw || targetRaw.indexOf('gemini.google.com/app') === -1) {
+    logStepFail(tabId, roundId, stepKey, 4, '动作失败+缺少 geminiConversationUrl', '');
+    throw new Error('GEMINI_RECOVER_NO_CONVERSATION_URL');
+  }
+  const want = normalizeGeminiConversationUrlForCompare(targetRaw);
+  logStepEnter(tabId, roundId, stepKey, 4, '确认打开目标 Gemini 会话');
+  const tab = await chrome.tabs.get(tabId);
+  const cur = normalizeGeminiConversationUrlForCompare(tab.url || '');
+  if (cur !== want) {
+    logStepInfo(tabId, roundId, stepKey, 4, '正在导航至目标会话');
+    await chrome.tabs.update(tabId, { url: targetRaw });
+    await waitForTabUrlWhen(
+      tabId,
+      60000,
+      (u) => u.indexOf('gemini.google.com') !== -1 && isGeminiAppUrl(u) && normalizeGeminiConversationUrlForCompare(u) === want,
+      'GEMINI_RECOVER_NAV_TIMEOUT',
+    );
+    await new Promise((r) => setTimeout(r, 600));
+  }
+  logStepDone(tabId, roundId, stepKey, 4, '会话页已就绪');
+}
+
+/** GEMINI_ASYNC_PROBE：DOM 完成态检测（不依赖预览图）。 */
+export async function step05_gemini_recover_probe_turn(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step05_gemini_recover_probe';
+  const turnId =
+    typeof payload.geminiTurnContainerId === 'string' ? payload.geminiTurnContainerId.trim() : '';
+  if (!turnId) {
+    logStepFail(tabId, roundId, stepKey, 5, '动作失败+缺少 geminiTurnContainerId', '');
+    throw new Error('GEMINI_RECOVER_NO_TURN_ID');
+  }
+  const r = await execGeminiMainRunnerReturn(ctx, {
+    nn: 5,
+    stepKey,
+    runnerName: 'runGeminiProbeTurnComplete',
+    mainPayload: { turnContainerId: turnId },
+    failUserMsg: '动作失败+Gemini 探查页内执行失败',
+    startMsg: '按锚点探查本轮是否已生成完成',
+    doneMsg: '探查完成',
+  });
+  if (r && r.outcome === 'not_ready') {
+    ctx.geminiProbeOutcome = 'not_ready';
+    return;
+  }
+  ctx.geminiProbeOutcome = 'ready';
+}
+
+/** GEMINI_ASYNC_RELAY：下载整图至 base64（预览已加载后）。 */
+export async function step05_gemini_recover_collect_image(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step05_gemini_recover_collect';
+  const turnId =
+    typeof payload.geminiTurnContainerId === 'string' ? payload.geminiTurnContainerId.trim() : '';
+  if (!turnId) {
+    logStepFail(tabId, roundId, stepKey, 5, '动作失败+缺少 geminiTurnContainerId', '');
+    throw new Error('GEMINI_RECOVER_NO_TURN_ID');
+  }
+  const r = await execGeminiMainRunnerReturn(ctx, {
+    nn: 5,
+    stepKey,
+    runnerName: 'runGeminiRecoverDownloadImageAsBase64',
+    mainPayload: { turnContainerId: turnId, captureTimeoutMs: 120000 },
+    failUserMsg: '动作失败+Gemini 取回整图失败',
+    startMsg: '在目标轮次内等待预览就绪并拦截整图下载',
+    doneMsg: '已取回整图数据',
+  });
+  ctx.geminiRecoveredImages = Array.isArray(r.images) ? r.images : [];
+}
+
+/** GEMINI_ASYNC_RELAY：登记 SUCCEEDED。 */
+export async function step06_gemini_recover_relay_outcome(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step06_gemini_recover_relay';
+  const images = ctx.geminiRecoveredImages;
+  if (!Array.isArray(images) || images.length < 1) {
+    logStepInfo(tabId, roundId, stepKey, 6, '无图片可落库');
+    return;
+  }
+  if (!geminiRecoverGenerationEventComplete(payload)) {
+    logStepInfo(tabId, roundId, stepKey, 6, '缺少 generationEvent 或扁平字段已跳过落库');
+    return;
+  }
+  logStepEnter(tabId, roundId, stepKey, 6, '登记异步成功落库');
+  const ge = buildGeminiRelayGenerationEvent(payload, ctx);
+  const aj = typeof ge.async_job_id === 'string' ? ge.async_job_id.trim().toLowerCase() : '';
+  if (!GEMINI_ASYNC_JOB_ID_RE.test(aj)) {
+    logStepFail(tabId, roundId, stepKey, 6, '动作失败+缺少合法 async_job_id', '');
+    throw new Error('GEMINI_RECOVER_NO_ASYNC_JOB');
+  }
+  ctx.frameworkAsyncJobOutcome = {
+    type: 'SUCCEEDED',
+    images,
+    generationEvent: ge,
+  };
+  logStepDone(tabId, roundId, stepKey, 6, '已登记回收结果+待框架提交落库');
 }

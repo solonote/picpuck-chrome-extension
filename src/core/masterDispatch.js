@@ -3,11 +3,23 @@
  */
 import { allocateTab } from './allocateTab.js';
 import { dispatchRound } from './dispatchRound.js';
-import { registerWatchLoopAfterJimengLaunch } from './asyncWatchLoopRegistry.js';
+import { registerAsyncRecoverWatchLoop } from './asyncWatchLoopRegistry.js';
 import { detachLogSink } from './logSink.js';
 import { releaseExecSlot } from './releaseExecSlot.js';
 import { inFlightByTabId, roundBinding } from './taskBindings.js';
-import { registerGeminiRelayCallerTab, registerJimengRelayCallerTab } from './relayCallerTabTTL.js';
+import { registerRelayCallerTabForRound } from './relayCallerTabTTL.js';
+
+/** 需在熔炉 caller Tab 登记 TTL 的指令（多图/整图分片回传依赖 roundId → callerTabId） */
+const RELAY_CALLER_TAB_COMMANDS = new Set([
+  'GEMINI_IMAGE_FILL',
+  'GEMINI_ASYNC_LAUNCH',
+  'GEMINI_ASYNC_PROBE',
+  'GEMINI_ASYNC_RELAY',
+  'JIMENG_IMAGE_FILL',
+  'JIMENG_ASYNC_LAUNCH',
+  'JIMENG_ASYNC_PROBE',
+  'JIMENG_ASYNC_RELAY',
+]);
 
 /**
  * @param {string} clientRequestId
@@ -40,24 +52,14 @@ export async function masterDispatch(clientRequestId, command, payload, callerTa
   });
   inFlightByTabId.set(tabId, roundId);
 
-  if (command === 'GEMINI_IMAGE_FILL' && callerTabId != null && callerTabId > 0) {
-    registerGeminiRelayCallerTab(roundId, callerTabId);
-  }
-  if (
-    (command === 'JIMENG_IMAGE_FILL' ||
-      command === 'JIMENG_ASYNC_LAUNCH' ||
-      command === 'JIMENG_ASYNC_PROBE' ||
-      command === 'JIMENG_ASYNC_RELAY') &&
-    callerTabId != null &&
-    callerTabId > 0
-  ) {
-    registerJimengRelayCallerTab(roundId, callerTabId);
+  if (RELAY_CALLER_TAB_COMMANDS.has(command) && callerTabId != null && callerTabId > 0) {
+    registerRelayCallerTabForRound(roundId, callerTabId);
   }
 
   try {
     const dr = await dispatchRound({ clientRequestId, command, tabId, roundId, payload });
-    if (dr.phase === 'success' && dr.jimengWatchLoopRegister) {
-      registerWatchLoopAfterJimengLaunch(dr.jimengWatchLoopRegister);
+    if (dr.phase === 'success' && dr.asyncRecoverWatchLoopRegistration) {
+      registerAsyncRecoverWatchLoop(dr.asyncRecoverWatchLoopRegistration);
     }
     return {
       ok: dr.phase === 'success',

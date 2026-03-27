@@ -13,8 +13,6 @@ import {
   JIMENG_WORKBENCH_NOT_READY,
 } from './jimengErrorCodes.js';
 import { JIMENG_AI_TOOL_HOME, isJimengAiToolHomeUrl } from './jimengUrls.js';
-import { ensureMcupExtensionAccessTokenOrThrow } from '../../core/extensionAccessTokenLifecycle.js';
-import { mcupPatchExtensionState } from '../../core/mcupGenerationAsyncApi.js';
 
 /** 设计 §3.1.1：与 `manifest.json` `web_accessible_resources` 路径一致 */
 const JIMENG_IMAGE_MAIN_WORLD_FILE = 'src/agents/jimeng/jimengImageMainWorld.js';
@@ -652,17 +650,12 @@ export async function step20_jimeng_patch_remote_after_anchor(ctx) {
     logStepFail(tabId, roundId, stepKey, 20, '动作失败+缺少 projectId 无法同步锚点', '');
     throw new Error('JIMENG_ASYNC_NO_PROJECT');
   }
-  logStepEnter(tabId, roundId, stepKey, 20, '将即梦锚点同步至后端');
-  await ensureMcupExtensionAccessTokenOrThrow();
-  /** 仅写入锚点上下文，保持 `EXT_REMOTE_IN_FLIGHT`；「待回收」在探查成功后再 PATCH（EXT_REMOTE_AWAITING_RELAY）。 */
-  await mcupPatchExtensionState({
-    projectId,
-    async_job_id: aj,
-    extension_remote_context: JSON.stringify({
-      jimengRecordAnchor: anchor,
-    }),
+  logStepEnter(tabId, roundId, stepKey, 20, '组好 extension_remote_context 供框架 PATCH');
+  /** 由 `flushExtensionRemoteContextIfPresent` 在本轮步骤结束后统一 PATCH */
+  ctx.pendingExtensionRemoteContext = JSON.stringify({
+    jimengRecordAnchor: anchor,
   });
-  logStepDone(tabId, roundId, stepKey, 20, '锚点已同步');
+  logStepDone(tabId, roundId, stepKey, 20, '已交框架同步远程上下文');
 }
 
 /** 等待生成结束并统计结果图张数；自 Enter 起总超时 600s */

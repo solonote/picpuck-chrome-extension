@@ -33,8 +33,8 @@ function selectLaunchCommandAndPayload({ pending, fillOnly, asyncJobId }) {
     payload.prompt = payload.input_prompt;
   }
 
-  if (profile.defaultJimengSubmitModeForLaunch != null && payload.jimengSubmitMode == null) {
-    payload.jimengSubmitMode = profile.defaultJimengSubmitModeForLaunch;
+  if (profile.defaultSubmitModeForLaunch != null && payload.jimengSubmitMode == null) {
+    payload.jimengSubmitMode = profile.defaultSubmitModeForLaunch;
   }
 
   return { command, payload };

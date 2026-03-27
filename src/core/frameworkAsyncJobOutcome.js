@@ -3,7 +3,10 @@
  * agent 步骤只写入 {@code ctx.frameworkAsyncJobOutcome}，不得直接调用 generation-async/complete。
  */
 import { ensureMcupExtensionAccessTokenOrThrow } from './extensionAccessTokenLifecycle.js';
-import { mcupPostGenerationAsyncComplete, mcupPostGenerationAsyncCompleteFromJimengRelay } from './mcupGenerationAsyncApi.js';
+import {
+  mcupPostGenerationAsyncComplete,
+  mcupPostGenerationAsyncCompleteSucceededWithImages,
+} from './mcupGenerationAsyncApi.js';
 
 /**
  * @typedef {{
@@ -47,7 +50,7 @@ export async function submitFrameworkAsyncJobOutcomeIfPresent(ctx) {
       delete ctx.frameworkAsyncJobOutcome;
       throw new Error('FRAMEWORK_ASYNC_OUTCOME_SUCCEEDED_INVALID');
     }
-    await mcupPostGenerationAsyncCompleteFromJimengRelay(ge, images);
+    await mcupPostGenerationAsyncCompleteSucceededWithImages(ge, images);
     delete ctx.frameworkAsyncJobOutcome;
     return { submitted: true, outcomeType: 'SUCCEEDED' };
   }

@@ -1,11 +1,11 @@
 /**
- * 即梦异步「检测进度」：
- * 1. LAUNCH 成功：`masterDispatch` 在 round 成功后调用 `registerWatchLoopAfterJimengLaunch`；或熔炉 `RECOVER` / `WATCH_PROBE` → `onManualProbeRequest`。
+ * 异步「检测进度」：
+ * 1. LAUNCH 成功：`masterDispatch` 在 round 成功后调用 `registerAsyncRecoverWatchLoop`；或熔炉 `RECOVER` / `WATCH_PROBE` → `onManualProbeRequest`。
  * 2. `chrome.alarms` 触发 → 注入的 `dispatchAsyncGenerationRecover`（payload 存 `chrome.storage.session` 以扛 SW 冷启动）。
- * 3. RECOVER 跑完后若得到工作 Tab，在工作 Tab 挂 `startJimengRecoverPageWatcher`；页内判定就绪则 `JIMENG_PAGE_RECOVER_READY` 再 dispatch 一轮 RECOVER 取图。
+ * 3. RECOVER 跑完后若 profile 要求且得到工作 Tab，在工作 Tab 挂页内 watcher；就绪后再 dispatch 一轮 RECOVER 取图。
  * 4. 成功回传 / 失败 / CANCEL → `unregisterWatchLoop`。
  */
-import { startJimengRecoverPageWatcherFromLaunch } from './jimengRecoverPageWatcherLaunch.js';
+import { startRecoverPageWatcherFromLaunch } from './recoverPageWatcherLaunch.js';
 import { resolveProfileByCoreEngine } from './asyncEngineProfiles.js';
 
 /**
@@ -41,10 +41,10 @@ function normalizeId(id) {
   return String(id || '').trim().toLowerCase();
 }
 
-function scheduleJimengProbePageWatcher(args) {
+function scheduleRecoverPageWatcherAfterProbe(args) {
   const { workTabId, asyncJobId, callerTabId, recoverPayload } = args;
   if (typeof workTabId !== 'number' || workTabId <= 0) return;
-  void startJimengRecoverPageWatcherFromLaunch({
+  void startRecoverPageWatcherFromLaunch({
     workTabId,
     roundId: '',
     async_job_id: asyncJobId,
@@ -117,10 +117,10 @@ export function scheduleNextProbe(asyncJobId, delayMs) {
 }
 
 /**
- * 即梦异步 LAUNCH 成功后由 `dispatchRound` 调用。
+ * 异步 LAUNCH 成功后由 `dispatchRound` 经 `masterDispatch` 注册。
  * @param {{ async_job_id: string, recoverPayload: Record<string, unknown>, callerTabId?: number }} args
  */
-export function registerWatchLoopAfterJimengLaunch({ async_job_id, recoverPayload, callerTabId }) {
+export function registerAsyncRecoverWatchLoop({ async_job_id, recoverPayload, callerTabId }) {
   const id = normalizeId(async_job_id);
   const entry = {
     recoverPayload: { ...recoverPayload, async_job_id: id },
@@ -258,11 +258,11 @@ async function runProbeInner(asyncJobId) {
 
   const payload = { ...entry.recoverPayload };
   const coreEng = String(payload.core_engine || '').trim();
-  let usePageRecoverReady = false;
+  let injectWatcher = false;
   try {
-    usePageRecoverReady = resolveProfileByCoreEngine(coreEng).usePageRecoverReady === true;
+    injectWatcher = resolveProfileByCoreEngine(coreEng).injectRecoverPageWatcherAfterProbe === true;
   } catch {
-    usePageRecoverReady = false;
+    injectWatcher = false;
   }
 
   const runRecover = dispatchAsyncGenerationRecoverRef;
@@ -274,12 +274,12 @@ async function runProbeInner(asyncJobId) {
     const result = await runRecover(callerTabId, payload);
     /** 成功回收后 `notifyAsyncJobRecoverFinished` 会删条目；切勿在条目已删后再挂页内 watcher */
     if (
-      usePageRecoverReady &&
+      injectWatcher &&
       typeof result.tabId === 'number' &&
       result.tabId > 0 &&
       watchLoopPayloads.has(id)
     ) {
-      scheduleJimengProbePageWatcher({
+      scheduleRecoverPageWatcherAfterProbe({
         workTabId: result.tabId,
         asyncJobId: id,
         callerTabId: typeof callerTabId === 'number' ? callerTabId : 0,

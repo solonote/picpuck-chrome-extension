@@ -4,7 +4,10 @@
 import { getCommandRecord } from './registry.js';
 import { getOrCreateRoundContext, appendLog, updatePhase, getContext } from './roundContext.js';
 import { releaseExecSlot } from './releaseExecSlot.js';
-import { clearJimengRelayCallerTabRegistration, getJimengRelayCallerTabId } from './relayCallerTabTTL.js';
+import {
+  clearRelayCallerTabRegistrationForRound,
+  getRelayCallerTabIdForRound,
+} from './relayCallerTabTTL.js';
 import { inFlightByTabId, roundBinding } from './taskBindings.js';
 import { detachLogSink } from './logSink.js';
 import { isAsyncJobCancelled } from './asyncGenerationState.js';
@@ -15,15 +18,16 @@ import {
   frameworkStep02_attachLogSink,
   frameworkStep03_ensurePageHelpers,
 } from './frameworkPreflight.js';
-import { startJimengRecoverPageWatcherFromLaunch } from './jimengRecoverPageWatcherLaunch.js';
+import { startRecoverPageWatcherFromLaunch } from './recoverPageWatcherLaunch.js';
 import { resolveProfileByCoreEngine } from './asyncEngineProfiles.js';
+import { flushExtensionRemoteContextIfPresent } from './flushExtensionRemoteContextIfPresent.js';
 import { submitFrameworkAsyncJobOutcomeIfPresent } from './frameworkAsyncJobOutcome.js';
 import { notifyAsyncJobRecoverFinished } from './asyncWatchLoopRegistry.js';
 import { getRecoverCheckFocusWorkTab } from './asyncRecoverTabPolicy.js';
 import { applyRecoverSilentWorkTabSurface } from './recoverSilentWorkTab.js';
 /**
  * @param {{ clientRequestId: string, command: string, tabId: number, roundId: string, payload: Record<string, unknown> }} args
- * @returns {Promise<{ phase: string, probeOutcome?: string, jimengWatchLoopRegister?: { async_job_id: string, recoverPayload: Record<string, unknown>, callerTabId?: number } }>}
+ * @returns {Promise<{ phase: string, probeOutcome?: string, asyncRecoverWatchLoopRegistration?: { async_job_id: string, recoverPayload: Record<string, unknown>, callerTabId?: number } }>}
  */
 export async function dispatchRound(args) {
   const { clientRequestId, command, tabId, roundId, payload } = args;
@@ -33,15 +37,15 @@ export async function dispatchRound(args) {
     await releaseExecSlot(tabId);
     inFlightByTabId.delete(tabId);
     roundBinding.delete(roundId);
-    clearJimengRelayCallerTabRegistration(roundId);
+    clearRelayCallerTabRegistrationForRound(roundId);
     detachLogSink(tabId);
-    return { phase: 'error', jimengWatchLoopRegister: undefined };
+    return { phase: 'error', asyncRecoverWatchLoopRegistration: undefined };
   }
 
   /**
    * Gemini：`step07_gemini_apply_effective_prompt_on_context` 写入 `effectivePrompt`，
    * `step09_gemini_fill_input_and_paste_images` 读取（设计 §5.1 / §11.1）。
-   * @type {{ tabId: number, roundId: string, command: string, clientRequestId: string, payload: Record<string, unknown>, effectivePrompt?: string, frameworkAsyncJobOutcome?: object }}
+   * @type {{ tabId: number, roundId: string, command: string, clientRequestId: string, payload: Record<string, unknown>, effectivePrompt?: string, geminiAsyncAnchor?: { conversationUrl: string, turnContainerId: string }, geminiProbeOutcome?: string, geminiRecoveredImages?: unknown[], frameworkAsyncJobOutcome?: object, jimengRecordAnchor?: object, jimengProbeOutcome?: string, pendingExtensionRemoteContext?: string | Record<string, unknown> }}
    */
   const ctx = {
     tabId,
@@ -57,8 +61,8 @@ export async function dispatchRound(args) {
   c.command = command;
   c.startedAt = Date.now();
 
-  /** LAUNCH 成功且含锚点时由 `masterDispatch` 调用 `registerWatchLoopAfterJimengLaunch`（避免 dispatchRound ↔ asyncWatchLoopRegistry 循环依赖） */
-  let jimengWatchLoopRegister;
+  /** LAUNCH 成功且含锚点时由 `masterDispatch` 调用 `registerAsyncRecoverWatchLoop`（避免 dispatchRound ↔ asyncWatchLoopRegistry 循环依赖） */
+  let asyncRecoverWatchLoopRegistration;
 
   try {
     updatePhase(tabId, 'received');
@@ -101,11 +105,13 @@ export async function dispatchRound(args) {
       assertAsyncJobNotCancelled();
     }
 
+    await flushExtensionRemoteContextIfPresent(ctx);
+
     const outcomeSubmit = await submitFrameworkAsyncJobOutcomeIfPresent(ctx);
     if (
       outcomeSubmit.submitted &&
       outcomeSubmit.outcomeType === 'SUCCEEDED' &&
-      ctx.command === 'JIMENG_ASYNC_RELAY'
+      (ctx.command === 'JIMENG_ASYNC_RELAY' || ctx.command === 'GEMINI_ASYNC_RELAY')
     ) {
       const ajDone =
         ctx.payload && typeof ctx.payload.async_job_id === 'string'
@@ -137,26 +143,33 @@ export async function dispatchRound(args) {
     ) {
       const aj = typeof payload.async_job_id === 'string' ? payload.async_job_id.trim().toLowerCase() : '';
       const ajOk = /^[a-z0-9]{12}$/.test(aj);
-      const hasAnchor = !!(ctx.jimengRecordAnchor && typeof ctx.jimengRecordAnchor === 'object');
+      const hasAnchor = launchProfile.hasLaunchAnchor(ctx) === true;
       if (hasAnchor && ajOk) {
-        const callerTabId = getJimengRelayCallerTabId(roundId);
+        const callerTabId = getRelayCallerTabIdForRound(roundId);
         const recoverPayload = {
           async_job_id: aj,
           core_engine: String(payload.core_engine || '').trim(),
           projectId: typeof payload.projectId === 'string' ? payload.projectId.trim() : '',
-          subjectType: typeof payload.subjectType === 'string' ? payload.subjectType.trim() : '',
-          subjectId: typeof payload.subjectId === 'string' ? payload.subjectId.trim() : '',
-          input_prompt: typeof payload.input_prompt === 'string' ? payload.input_prompt : '',
-          jimengRecordAnchor: ctx.jimengRecordAnchor,
         };
-        void startJimengRecoverPageWatcherFromLaunch({
-          workTabId: tabId,
-          roundId,
-          async_job_id: aj,
-          forgeCallerTabId: typeof callerTabId === 'number' ? callerTabId : 0,
-          recoverPayload,
-        }).catch((e) => console.warn('[PicPuck] jimeng page watcher launch', e));
-        jimengWatchLoopRegister = {
+        if (payload.generationEvent && typeof payload.generationEvent === 'object') {
+          recoverPayload.generationEvent = payload.generationEvent;
+        }
+        const st = typeof payload.subjectType === 'string' ? payload.subjectType.trim() : '';
+        const sid = typeof payload.subjectId === 'string' ? payload.subjectId.trim() : '';
+        if (st) recoverPayload.subjectType = st;
+        if (sid) recoverPayload.subjectId = sid;
+        if (typeof payload.input_prompt === 'string') recoverPayload.input_prompt = payload.input_prompt;
+        launchProfile.mergeLaunchRecoverPayload(ctx, recoverPayload);
+        if (launchProfile.startRecoverPageWatcherOnLaunchSuccess === true) {
+          void startRecoverPageWatcherFromLaunch({
+            workTabId: tabId,
+            roundId,
+            async_job_id: aj,
+            forgeCallerTabId: typeof callerTabId === 'number' ? callerTabId : 0,
+            recoverPayload,
+          }).catch((e) => console.warn('[PicPuck] recover page watcher launch', e));
+        }
+        asyncRecoverWatchLoopRegistration = {
           async_job_id: aj,
           recoverPayload,
           callerTabId: typeof callerTabId === 'number' ? callerTabId : undefined,
@@ -166,7 +179,7 @@ export async function dispatchRound(args) {
           roundId,
           step: 'system',
           level: 'info',
-          message: 'Step99.info.jimengRecoverPageWatcherStarted async_job_id=' + aj,
+          message: 'Step99.info.asyncRecoverWatchLoopRegistered async_job_id=' + aj,
         });
       } else {
         const mode = payload && payload.jimengSubmitMode;
@@ -174,10 +187,10 @@ export async function dispatchRound(args) {
         console.warn('[PicPuck] WatchLoop 未开启', {
           reason,
           async_job_id: aj || '(empty)',
-          jimengSubmitMode: mode,
+          submitMode: mode,
           hint:
             reason === 'no_anchor'
-              ? 'LAUNCH 结束时 ctx 无 jimengRecordAnchor（Step19 未写入或失败）'
+              ? 'LAUNCH 结束时 profile.hasLaunchAnchor 为假（锚点步骤未写入或失败）'
               : 'async_job_id 须为 12 位 [a-z0-9]',
         });
         appendLog(tabId, {
@@ -188,7 +201,7 @@ export async function dispatchRound(args) {
           message:
             'Step99.info.watchLoopSkipped reason=' +
             reason +
-            (mode != null ? ' jimengSubmitMode=' + String(mode) : ''),
+            (mode != null ? ' submitMode=' + String(mode) : ''),
         });
       }
     }
@@ -234,7 +247,7 @@ export async function dispatchRound(args) {
     await releaseExecSlot(tabId);
     inFlightByTabId.delete(tabId);
     roundBinding.delete(roundId);
-    clearJimengRelayCallerTabRegistration(roundId);
+    clearRelayCallerTabRegistrationForRound(roundId);
     detachLogSink(tabId);
   }
 
@@ -245,17 +258,21 @@ export async function dispatchRound(args) {
   } catch {
     probeProfile = null;
   }
+  const probeOutcomeRaw =
+    probeProfile && typeof probeProfile.readProbeOutcome === 'function'
+      ? probeProfile.readProbeOutcome(ctx).trim()
+      : '';
   const probeOutcome =
     probeProfile &&
     probeProfile.probeCommand &&
     command === probeProfile.probeCommand &&
-    typeof ctx.jimengProbeOutcome === 'string' &&
-    ctx.jimengProbeOutcome.trim()
-      ? ctx.jimengProbeOutcome.trim()
+    probeOutcomeRaw
+      ? probeOutcomeRaw
       : undefined;
   return {
     phase,
-    jimengWatchLoopRegister: phase === 'success' ? jimengWatchLoopRegister : undefined,
+    asyncRecoverWatchLoopRegistration:
+      phase === 'success' ? asyncRecoverWatchLoopRegistration : undefined,
     ...(probeOutcome ? { probeOutcome } : {}),
   };
 }

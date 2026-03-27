@@ -6,9 +6,9 @@ import { PICPUCK_COMMAND, LOG_APPEND } from './runtimeMessages.js';
 import { getCommandRecordByPicpuckAction } from './registry.js';
 import { masterDispatch } from './masterDispatch.js';
 import {
-  clearGeminiRelayCallerTabRegistration,
-  getGeminiRelayCallerTabId,
-  touchGeminiRelayCallerTabTtl,
+  clearRelayCallerTabRegistrationForRound,
+  getRelayCallerTabIdForRound,
+  touchRelayCallerTabTtlForRound,
 } from './relayCallerTabTTL.js';
 import { getWorkTabIdByRoundId } from './taskBindings.js';
 import { appendLog, getContext } from './roundContext.js';
@@ -237,12 +237,12 @@ export function installRuntimeMessageHandlers() {
               sendResponse({ ok: false, error: 'bad gemini relay BEGIN' });
               return;
             }
-            const callerTabId = getGeminiRelayCallerTabId(roundId);
+            const callerTabId = getRelayCallerTabIdForRound(roundId);
             if (callerTabId == null) {
               sendResponse({ ok: false, error: 'relay round expired' });
               return;
             }
-            touchGeminiRelayCallerTabTtl(roundId);
+            touchRelayCallerTabTtlForRound(roundId);
             await geminiRelayForwardBegin(callerTabId, roundId, generationEvent, contentType, base64CharLength);
             sendResponse({ ok: true });
           } catch (e) {
@@ -263,12 +263,12 @@ export function installRuntimeMessageHandlers() {
               sendResponse({ ok: false, error: 'bad gemini relay CHUNK' });
               return;
             }
-            const callerTabId = getGeminiRelayCallerTabId(roundId);
+            const callerTabId = getRelayCallerTabIdForRound(roundId);
             if (callerTabId == null) {
               sendResponse({ ok: false, error: 'relay round expired' });
               return;
             }
-            touchGeminiRelayCallerTabTtl(roundId);
+            touchRelayCallerTabTtlForRound(roundId);
             await geminiRelayForwardChunk(callerTabId, roundId, seq, text);
             sendResponse({ ok: true });
           } catch (e) {
@@ -287,14 +287,14 @@ export function installRuntimeMessageHandlers() {
               sendResponse({ ok: false, error: 'bad gemini relay END' });
               return;
             }
-            const callerTabId = getGeminiRelayCallerTabId(roundId);
+            const callerTabId = getRelayCallerTabIdForRound(roundId);
             if (callerTabId == null) {
               sendResponse({ ok: false, error: 'relay round expired' });
               return;
             }
-            touchGeminiRelayCallerTabTtl(roundId);
+            touchRelayCallerTabTtlForRound(roundId);
             await geminiRelayForwardEnd(callerTabId, roundId);
-            clearGeminiRelayCallerTabRegistration(roundId);
+            clearRelayCallerTabRegistrationForRound(roundId);
             sendResponse({ ok: true });
           } catch (e) {
             const m = e instanceof Error ? e.message : String(e);

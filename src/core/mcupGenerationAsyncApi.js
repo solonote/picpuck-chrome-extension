@@ -89,10 +89,10 @@ export async function mcupPostGenerationAsyncComplete(formData) {
 
 /**
  * 与熔炉页 `completeGenerationAsyncWithImages` 字段顺序一致（非文件 part 在前）。
- * @param {Record<string, unknown>} ge 与 `buildJimengRelayGenerationEvent` 相同形状的 generationEvent
+ * @param {Record<string, unknown>} ge 扩展侧写入的 generationEvent（camelCase 与扁平字段由本函数映射为 FormData）
  * @param {Array<{ imageBase64: string, contentType?: string }>} images
  */
-export async function mcupPostGenerationAsyncCompleteFromJimengRelay(ge, images) {
+export async function mcupPostGenerationAsyncCompleteSucceededWithImages(ge, images) {
   if (!ge || typeof ge !== 'object') throw new Error('MCUP_ASYNC_COMPLETE_BAD_GE');
   const aj = typeof ge.async_job_id === 'string' ? ge.async_job_id.trim().toLowerCase() : '';
   if (!/^[a-z0-9]{12}$/.test(aj)) throw new Error('MCUP_ASYNC_COMPLETE_BAD_JOB_ID');
@@ -116,7 +116,7 @@ export async function mcupPostGenerationAsyncCompleteFromJimengRelay(ge, images)
     const mainCt = ctRaw.split(';')[0].trim() || 'image/png';
     const blob = await fetch(`data:${mainCt};base64,${b64}`).then((r) => r.blob());
     const ext = mainCt.includes('jpeg') ? 'jpg' : mainCt.includes('webp') ? 'webp' : 'png';
-    const file = new File([blob], `jimeng-${i + 1}.${ext}`, { type: mainCt });
+    const file = new File([blob], `image-${i + 1}.${ext}`, { type: mainCt });
     form.append('file', file);
   }
   await mcupPostGenerationAsyncComplete(form);

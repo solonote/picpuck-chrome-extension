@@ -7,9 +7,9 @@ import {
   JIMENG_RELAY_SEND_FAILED,
 } from './jimengRelayErrorCodes.js';
 import {
-  clearJimengRelayCallerTabRegistration,
-  getJimengRelayCallerTabId,
-  touchJimengRelayCallerTabTtl,
+  clearRelayCallerTabRegistrationForRound,
+  getRelayCallerTabIdForRound,
+  touchRelayCallerTabTtlForRound,
 } from './relayCallerTabTTL.js';
 
 const PROTOCOL = 'picpuck.imageRelay';
@@ -115,7 +115,7 @@ export async function relayImagePayloadChunkedToTab(p) {
       throw new Error(JIMENG_RELAY_INVALID_PAYLOAD);
     }
   }
-  const fromReg = getJimengRelayCallerTabId(relayId);
+  const fromReg = getRelayCallerTabIdForRound(relayId);
   const callerTabId =
     typeof p.tabId === 'number' && p.tabId > 0 ? p.tabId : fromReg;
   if (callerTabId == null) {
@@ -139,7 +139,7 @@ export async function relayImagePayloadChunkedToTab(p) {
   };
 
   try {
-    touchJimengRelayCallerTabTtl(relayId);
+    touchRelayCallerTabTtlForRound(relayId);
     await sendRelayToTab(callerTabId, beginEnv);
 
     for (let imageIndex = 0; imageIndex < images.length; imageIndex += 1) {
@@ -147,7 +147,7 @@ export async function relayImagePayloadChunkedToTab(p) {
       let seq = 0;
       for (let off = 0; off < b64.length; off += CHUNK_CHARS) {
         const text = b64.slice(off, off + CHUNK_CHARS);
-        touchJimengRelayCallerTabTtl(relayId);
+        touchRelayCallerTabTtlForRound(relayId);
         await sendRelayToTab(callerTabId, {
           ...baseEnvelope(relayId),
           phase: 'CHUNK',
@@ -158,7 +158,7 @@ export async function relayImagePayloadChunkedToTab(p) {
         seq += 1;
       }
     }
-    touchJimengRelayCallerTabTtl(relayId);
+    touchRelayCallerTabTtlForRound(relayId);
     await sendRelayToTab(callerTabId, { ...baseEnvelope(relayId), phase: 'END' });
   } catch (e) {
     let detail = '';
@@ -172,5 +172,5 @@ export async function relayImagePayloadChunkedToTab(p) {
     await tryAbortToTab(callerTabId, relayId, JIMENG_RELAY_SEND_FAILED, tail || JIMENG_RELAY_SEND_FAILED);
     throw new Error(tail ? `${JIMENG_RELAY_SEND_FAILED}: ${tail}` : JIMENG_RELAY_SEND_FAILED);
   }
-  clearJimengRelayCallerTabRegistration(relayId);
+  clearRelayCallerTabRegistrationForRound(relayId);
 }
