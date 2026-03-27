@@ -14,11 +14,13 @@ import {
   setDispatchAsyncGenerationRecoverForWatchLoop,
 } from './asyncWatchLoopRegistry.js';
 import { dispatchAsyncGenerationRecover } from './asyncRecoverDispatch.js';
+import { installPicpuckWorkspaceWindowRemovedListener } from './picpuckWorkspaceWindow.js';
 
 /** 启动时打印三类消息名，便于与 src/content 对照验收 CP2-4 */
 console.info('[PicPuck SW] message types:', PICPUCK_COMMAND, LOG_APPEND, ROUND_PHASE);
 
 setDispatchAsyncGenerationRecoverForWatchLoop(dispatchAsyncGenerationRecover);
+installPicpuckWorkspaceWindowRemovedListener();
 installWatchLoopAlarmHandling();
 installTabRemovedHandler();
 installRuntimeMessageHandlers();

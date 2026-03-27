@@ -1,6 +1,6 @@
 /**
- * §9.4 allocateTab(command)：每次请求全量 `tabs.query`（§9.2）→ 按站点 `homeUrl` 前缀筛候选 → **再**筛 PicPuck 蓝组内 Tab（见 `picpuckWorkspaceTabGroup`）→
- * 按 tab.id 升序尝试 §9.3 原子抢占；无 idle 则 `tabs.create` 并入 PicPuck 组后再 `waitForTabUrlPrefix` 与抢占。
+ * §9.4 allocateTab(command)：先 `ensurePicpuckWorkspaceWindow` → 仅在该窗口内 `tabs.query`（§9.2）→ 按 `homeUrl` 筛候选 → **再**筛 PicPuck Agent 蓝组内 Tab（见 `picpuckWorkspaceTabGroup`）→
+ * 按 tab.id 升序尝试 §9.3 原子抢占；无 idle 则 `tabs.create`（指定 windowId）并入组后再 `waitForTabUrlPrefix` 与抢占。
  * `recoverAllocateSilentDefault` 为 true 时：`*_ASYNC_PROBE` 恒不在此聚焦窗口；`*_ASYNC_RELAY` 由 `getRecoverCheckFocusWorkTab()`（sync `picpuckRecoverCheckFocusTab`）决定。静默时 `dispatchRound` step03 后 `applyRecoverSilentWorkTabSurface`（已 active 则跳过；否则短暂 active 再还原，见 `recoverSilentWorkTab.js`）。RELAY 取回前可由 MAIN 再请求 `focusWorkTab`。
  */
 import { getCommandRecord } from './registry.js';
@@ -11,6 +11,10 @@ import {
   filterPicpuckWorkspaceCandidates,
 } from './picpuckWorkspaceTabGroup.js';
 import { getRecoverCheckFocusWorkTab, isAsyncRecoverProbeCommand } from './asyncRecoverTabPolicy.js';
+import {
+  ensurePicpuckWorkspaceWindow,
+  prunePlaceholderTabsInWorkspaceWindow,
+} from './picpuckWorkspaceWindow.js';
 
 /** @typedef {{ ok: true, tabId: number }} AllocateTabOk */
 /** @typedef {{ ok: false, errorCode: string, message?: string }} AllocateTabFail */
@@ -37,7 +41,8 @@ export async function allocateTab(command) {
       : await getRecoverCheckFocusWorkTab();
   }
 
-  const all = await chrome.tabs.query({});
+  const workspaceWindowId = await ensurePicpuckWorkspaceWindow();
+  const all = await chrome.tabs.query({ windowId: workspaceWindowId });
   const urlSorted = filterAndSortCandidates(all, homeUrl);
   const candidates = await filterPicpuckWorkspaceCandidates(urlSorted);
 
@@ -59,7 +64,11 @@ export async function allocateTab(command) {
     return { ok: false, errorCode: 'TAB_POOL_EXHAUSTED' };
   }
 
-  const created = await chrome.tabs.create({ url: taskBaseUrl, active: focusAfterAllocate });
+  const created = await chrome.tabs.create({
+    url: taskBaseUrl,
+    windowId: workspaceWindowId,
+    active: focusAfterAllocate,
+  });
   if (created.id == null) {
     return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'tabs.create no id' };
   }
@@ -70,6 +79,8 @@ export async function allocateTab(command) {
     console.warn('[PicPuck] ensureTabInPicpuckWorkspaceGroup after create', e);
     return { ok: false, errorCode: 'INTERNAL_TAB_STATE_ERROR', message: 'tab group failed' };
   }
+
+  await prunePlaceholderTabsInWorkspaceWindow(workspaceWindowId, created.id);
 
   try {
     await waitForTabUrlPrefix(created.id, homeUrl, 60000);

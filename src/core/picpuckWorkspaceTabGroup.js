@@ -1,8 +1,20 @@
 /**
- * PicPuck 工作区标签页分组：蓝色「PicPuck」组、仅复用组内 Tab（设计 docs/implements/picpuck-workspace-tab-group）。
+ * PicPuck 工作区标签页分组：蓝色「PicPuck Agent 专用」组、仅复用组内 Tab（专用浏览器窗口内，见 picpuckWorkspaceWindow）。
  * 用户自行打开、未在本组内的同域 Tab（含裸开 Gemini）不作为候选；扩展须新建并入组。
  */
+/** @readonly 与 UI 展示一致；旧版标题「PicPuck」仍识别并迁移为本标题。 */
+export const PICPUCK_AGENT_WORKSPACE_GROUP_TITLE = 'PicPuck Agent 专用';
+
+const LEGACY_WORKSPACE_GROUP_TITLE = 'PicPuck';
+
 const STORAGE_KEY = 'picpuckWorkspaceGroupByWindow';
+
+/**
+ * @param {chrome.tabGroups.TabGroup} g
+ */
+function isPicpuckAgentWorkspaceGroup(g) {
+  return g.color === 'blue' && (g.title === PICPUCK_AGENT_WORKSPACE_GROUP_TITLE || g.title === LEGACY_WORKSPACE_GROUP_TITLE);
+}
 
 /** @type {Map<number, Promise<void>>} */
 const winGroupChain = new Map();
@@ -52,7 +64,7 @@ async function getValidatedGroupIdForWindow(windowId) {
 }
 
 /**
- * 扫描窗口内标题为 PicPuck、蓝色组；若存在多个则合并为一个，避免「第二次失败再建组」产生同名双组。
+ * 扫描窗口内 PicPuck Agent 专用（或旧标题 PicPuck）、蓝色组；若存在多个则合并为一个。
  * @param {number} windowId
  * @returns {Promise<number | null>} 合并后应使用的 groupId；无则 null
  */
@@ -63,12 +75,18 @@ async function resolvePicpuckGroupIdInWindow(windowId) {
   } catch {
     return null;
   }
-  const picpuck = groups.filter((g) => g.title === 'PicPuck' && g.color === 'blue');
+  const picpuck = groups.filter((g) => isPicpuckAgentWorkspaceGroup(g));
   if (picpuck.length === 0) {
     return null;
   }
   if (picpuck.length === 1) {
-    return picpuck[0].id;
+    const only = picpuck[0].id;
+    try {
+      await chrome.tabGroups.update(only, { title: PICPUCK_AGENT_WORKSPACE_GROUP_TITLE, color: 'blue' });
+    } catch {
+      /* ignore */
+    }
+    return only;
   }
   const canonical = Math.min(...picpuck.map((g) => g.id));
   for (const g of picpuck) {
@@ -86,6 +104,11 @@ async function resolvePicpuckGroupIdInWindow(windowId) {
     } catch (e) {
       console.warn('[PicPuck] merge duplicate PicPuck tab groups failed', e);
     }
+  }
+  try {
+    await chrome.tabGroups.update(canonical, { title: PICPUCK_AGENT_WORKSPACE_GROUP_TITLE, color: 'blue' });
+  } catch {
+    /* ignore */
   }
   return canonical;
 }
@@ -147,7 +170,7 @@ async function doEnsureTabInGroup(tabId, windowId) {
   }
 
   const newGid = await chrome.tabs.group({ createProperties: { windowId }, tabIds: [tabId] });
-  await chrome.tabGroups.update(newGid, { title: 'PicPuck', color: 'blue' });
+  await chrome.tabGroups.update(newGid, { title: PICPUCK_AGENT_WORKSPACE_GROUP_TITLE, color: 'blue' });
   const map = await loadGroupMap();
   map[String(windowId)] = newGid;
   await saveGroupMap(map);
