@@ -7,6 +7,7 @@
  */
 import { startRecoverPageWatcherFromLaunch } from './recoverPageWatcherLaunch.js';
 import { resolveProfileByCoreEngine } from './asyncEngineProfiles.js';
+import { clearAsyncJobWorkTab } from './taskBindings.js';
 
 /**
  * @type {((callerTabId: number, payload: Record<string, unknown>) => Promise<{ ok?: boolean, tabId?: number }>) | null}
@@ -148,6 +149,7 @@ export function unregisterWatchLoop(async_job_id) {
   watchLoopPayloads.delete(id);
   manualPending.delete(id);
   void chrome.storage.session.remove(watchLoopSessionKey(id)).catch(() => {});
+  void clearAsyncJobWorkTab(id);
 }
 
 /**

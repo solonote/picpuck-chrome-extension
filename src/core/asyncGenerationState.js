@@ -1,6 +1,8 @@
 /**
  * 异步生成握手与作业控制（设计 **01**、**11**）：pending PRE 单槽、活跃作业取消集合。
  * 仅 SW 内存；随 Service Worker 休眠丢失，由熔炉 PRE/DISPATCH 重建。
+ *
+ * **与 `taskBindings.js` 分工**：本文件管「作业是否取消 / PRE 握手」；**工作台 Tab 指派**（round、async_job→tab）一律在 `taskBindings`，勿在此重复登记。
  */
 
 /** @type {Record<string, unknown> | null} */

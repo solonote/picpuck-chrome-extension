@@ -2,6 +2,7 @@
  * §5.0 masterDispatch：roundId → allocateTab（打开或复用工作 Tab，与具体 Task 步骤无关）→ 票据与 inFlight → dispatchRound。
  */
 import { allocateTab } from './allocateTab.js';
+import { registerAsyncJobWorkTab } from './taskBindings.js';
 import { dispatchRound } from './dispatchRound.js';
 import { registerAsyncRecoverWatchLoop } from './asyncWatchLoopRegistry.js';
 import { detachLogSink } from './logSink.js';
@@ -21,16 +22,35 @@ const RELAY_CALLER_TAB_COMMANDS = new Set([
   'JIMENG_ASYNC_RELAY',
 ]);
 
+/** 成功 allocate 后把 `async_job_id → tabId` 写入登记，供后续 PROBE/RELAY 等不再盲扫池子 */
+const ASYNC_JOB_WORK_TAB_REGISTER_COMMANDS = new Set([
+  'GEMINI_ASYNC_LAUNCH',
+  'GEMINI_ASYNC_PROBE',
+  'GEMINI_ASYNC_RELAY',
+  'JIMENG_ASYNC_LAUNCH',
+  'JIMENG_ASYNC_PROBE',
+  'JIMENG_ASYNC_RELAY',
+]);
+
 /**
  * @param {string} clientRequestId
  * @param {string} command CommandRecord.command
  * @param {Record<string, unknown>} payload
+ * @param {number} [callerTabId]
+ * @param {{ reuseWorkTabId?: number }} [options] `reuseWorkTabId`：异步 PROBE 成功后 RELAY 强制复用同一工作 Tab，避免再 allocate 出新页
  * @returns {Promise<{ ok: boolean, roundId: string, tabId: number, phase: string, errorCode?: string, probeOutcome?: string }>}
  */
-export async function masterDispatch(clientRequestId, command, payload, callerTabId) {
+export async function masterDispatch(clientRequestId, command, payload, callerTabId, options) {
   const roundId = crypto.randomUUID();
+  const reuse =
+    options && typeof options.reuseWorkTabId === 'number' && Number.isFinite(options.reuseWorkTabId)
+      ? Math.floor(options.reuseWorkTabId)
+      : undefined;
   // 工作 Tab：按 CommandRecord.homeUrl/taskBaseUrl 全量 query 后筛选并抢占或新建（core/allocateTab）
-  const alloc = await allocateTab(command);
+  const alloc = await allocateTab(command, {
+    reuseWorkTabId: reuse,
+    asyncJobId: typeof payload?.async_job_id === 'string' ? payload.async_job_id : undefined,
+  });
   if (!alloc.ok) {
     return {
       ok: false,
@@ -42,6 +62,9 @@ export async function masterDispatch(clientRequestId, command, payload, callerTa
     };
   }
   const tabId = alloc.tabId;
+  if (ASYNC_JOB_WORK_TAB_REGISTER_COMMANDS.has(command) && typeof payload?.async_job_id === 'string') {
+    void registerAsyncJobWorkTab(payload.async_job_id, tabId);
+  }
   // §5.0：仅在有 tabId 之后写入票据；顺序在 allocateTab 成功之后、dispatchRound 之前（§9.5）
   roundBinding.set(roundId, {
     roundId,

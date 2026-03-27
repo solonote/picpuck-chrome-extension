@@ -1,7 +1,8 @@
 /**
- * §9.4 allocateTab(command)：先 `ensurePicpuckWorkspaceWindow` → 仅在该窗口内 `tabs.query`（§9.2）→ 按 `homeUrl` 筛候选 → **再**筛 PicPuck Agent 蓝组内 Tab（见 `picpuckWorkspaceTabGroup`）→
+ * §9.4 allocateTab(command)：先 `ensurePicpuckWorkspaceWindow` → 仅在该窗口内 `tabs.query`（§9.2）→ 按 `homeUrl` 筛候选 → `filterPicpuckWorkspaceCandidates`（蓝组内优先，同域未入组亦纳入，抢占前 `ensureTabInPicpuckWorkspaceGroup`）→
  * 按 tab.id 升序尝试 §9.3 原子抢占；无 idle 则 `tabs.create`（指定 windowId）并入组后再 `waitForTabUrlPrefix` 与抢占。
  * `recoverAllocateSilentDefault` 为 true 时：`*_ASYNC_PROBE` 恒不在此聚焦窗口；`*_ASYNC_RELAY` 由 `getRecoverCheckFocusWorkTab()`（sync `picpuckRecoverCheckFocusTab`）决定。静默时 `dispatchRound` step03 后 `applyRecoverSilentWorkTabSurface`（已 active 则跳过；否则短暂 active 再还原，见 `recoverSilentWorkTab.js`）。RELAY 取回前可由 MAIN 再请求 `focusWorkTab`。
+ * **async_job_id → 工作 Tab**：`allocateOpts.asyncJobId` 查 `taskBindings.getAsyncJobWorkTab`（Core 唯一登记）。
  */
 import { getCommandRecord } from './registry.js';
 import { injectableAcquireExecSlot } from './execSlot/injectableAcquireExecSlot.js';
@@ -9,21 +10,67 @@ import { filterAndSortCandidates, MAX_SAME_BASE_TABS } from './tabCandidates.js'
 import {
   ensureTabInPicpuckWorkspaceGroup,
   filterPicpuckWorkspaceCandidates,
+  isTabInPicpuckWorkspaceGroup,
 } from './picpuckWorkspaceTabGroup.js';
 import { getRecoverCheckFocusWorkTab, isAsyncRecoverProbeCommand } from './asyncRecoverTabPolicy.js';
 import {
   ensurePicpuckWorkspaceWindow,
   prunePlaceholderTabsInWorkspaceWindow,
 } from './picpuckWorkspaceWindow.js';
+import { releaseExecSlot } from './releaseExecSlot.js';
+import { clearAsyncJobWorkTab, getAsyncJobWorkTab, normalizeAsyncJobId } from './taskBindings.js';
 
 /** @typedef {{ ok: true, tabId: number }} AllocateTabOk */
 /** @typedef {{ ok: false, errorCode: string, message?: string }} AllocateTabFail */
 
 /**
+ * PROBE→RELAY 连跑时：强制复用上一轮已占用过的同一工作 Tab（先 release 槽再抢占），避免 RELAY 再走候选列表时误判 busy 而 `tabs.create`。
+ *
+ * @param {number} reuseTabId
+ * @param {number} workspaceWindowId
+ * @param {{ homeUrl: string }} rec
+ * @param {boolean} focusAfterAllocate
+ * @returns {Promise<AllocateTabOk | null>}
+ */
+async function tryAllocateReusingProbeWorkTab(reuseTabId, workspaceWindowId, rec, focusAfterAllocate) {
+  const { homeUrl } = rec;
+  let tab;
+  try {
+    tab = await chrome.tabs.get(reuseTabId);
+  } catch {
+    return null;
+  }
+  if (tab.windowId !== workspaceWindowId) return null;
+  const u = tab.url || '';
+  if (!u.startsWith('http') || !u.startsWith(homeUrl)) return null;
+  await releaseExecSlot(reuseTabId);
+  let fresh = tab;
+  try {
+    fresh = await chrome.tabs.get(reuseTabId);
+  } catch {
+    return null;
+  }
+  if (!(await isTabInPicpuckWorkspaceGroup(fresh))) {
+    try {
+      await ensureTabInPicpuckWorkspaceGroup(reuseTabId);
+    } catch {
+      return null;
+    }
+  }
+  const got = await tryAcquireOnTab(reuseTabId);
+  if (!got.ok || !got.acquired) return null;
+  if (focusAfterAllocate) {
+    await focusWorkTab(reuseTabId);
+  }
+  return { ok: true, tabId: reuseTabId };
+}
+
+/**
  * @param {string} command
+ * @param {{ reuseWorkTabId?: number, asyncJobId?: string }} [allocateOpts]
  * @returns {Promise<AllocateTabOk | AllocateTabFail>}
  */
-export async function allocateTab(command) {
+export async function allocateTab(command, allocateOpts) {
   const rec = getCommandRecord(command);
   if (!rec) {
     return { ok: false, errorCode: 'UNKNOWN_COMMAND', message: 'command not registered' };
@@ -42,13 +89,54 @@ export async function allocateTab(command) {
   }
 
   const workspaceWindowId = await ensurePicpuckWorkspaceWindow();
+
+  const jobNorm = normalizeAsyncJobId(allocateOpts?.asyncJobId);
+  if (jobNorm) {
+    const regTab = await getAsyncJobWorkTab(allocateOpts.asyncJobId);
+    if (typeof regTab === 'number' && regTab > 0) {
+      const reusedReg = await tryAllocateReusingProbeWorkTab(
+        regTab,
+        workspaceWindowId,
+        rec,
+        focusAfterAllocate,
+      );
+      if (reusedReg) return reusedReg;
+      await clearAsyncJobWorkTab(allocateOpts.asyncJobId);
+    }
+  }
+
+  const reuseWorkTabId = allocateOpts?.reuseWorkTabId;
+  if (typeof reuseWorkTabId === 'number' && reuseWorkTabId > 0) {
+    const reused = await tryAllocateReusingProbeWorkTab(
+      reuseWorkTabId,
+      workspaceWindowId,
+      rec,
+      focusAfterAllocate,
+    );
+    if (reused) return reused;
+  }
+
   const all = await chrome.tabs.query({ windowId: workspaceWindowId });
   const urlSorted = filterAndSortCandidates(all, homeUrl);
   const candidates = await filterPicpuckWorkspaceCandidates(urlSorted);
 
-  // R12：同一前缀下第一个 idle 候选即复用；仅 PicPuck 蓝组内 Tab（不抢占用户裸开同域页）
+  // R12：同一前缀下第一个 idle 候选即复用；已在蓝组优先，未入组同域页会先并入组再抢占（避免窗口里已有 Gemini 仍新建 Tab）
   for (const tab of candidates) {
     if (tab.id == null) continue;
+    let fresh;
+    try {
+      fresh = await chrome.tabs.get(tab.id);
+    } catch {
+      continue;
+    }
+    if (!(await isTabInPicpuckWorkspaceGroup(fresh))) {
+      try {
+        await ensureTabInPicpuckWorkspaceGroup(tab.id);
+      } catch (e) {
+        console.warn('[PicPuck] ensureTabInPicpuckWorkspaceGroup before acquire', e);
+        continue;
+      }
+    }
     const got = await tryAcquireOnTab(tab.id);
     if (got.ok && got.acquired) {
       if (focusAfterAllocate) {

@@ -1,6 +1,10 @@
 /**
- * PicPuck 工作区标签页分组：展示名为「PicPuck Agent 专用」、蓝色；**识别组以标题（及 session 登记的 groupId）为准**，不能依赖新建瞬间的 color===blue。
- * 用户自行打开、未在本组内的同域 Tab（含裸开 Gemini）不作为候选；扩展须新建并入组。
+ * PicPuck 工作区标签页分组：展示名为「PicPuck Agent 专用」、蓝色。
+ * **解析 groupId：先在当前窗口用组标题匹配**（含旧标题 PicPuck），有则合并多组并采用该 id；无标题命中再用 session 辅助「新建尚未写标题」的瞬间。不以 session 为优先，避免与真实已命名组脱节。
+ * `allocateTab`：`filterPicpuckWorkspaceCandidates` 会纳入**专用窗口内**同 homeUrl 但未入蓝组的 Tab（优先尝试并入组并复用），避免已开 Gemini 仍 `tabs.create` 重复开页。
+ *
+ * **分组列表**：使用 `chrome.tabGroups.query({ windowId })` 可拿到当前窗口分组；另用 `tabGroups.get` + `tabs.query({ groupId })` 过滤已解散/无 Tab 的残留项。重复建组常见根因是**并发**（见 `ensureTabInPicpuckWorkspaceGroup` 中 Web Locks 说明），而非「读不到列表」。
+ * **查/建/取 id 的一体化**：见 `runPicpuckWorkspaceGroupEnsureAtomicSequence`（仅能在锁内跑）；对外只调 `ensureTabInPicpuckWorkspaceGroup`。平台无同步 API，故为 async「单事务」而非字面同步。
  */
 /** @readonly 与 UI 展示一致；旧版标题「PicPuck」仍识别并迁移为本标题。 */
 export const PICPUCK_AGENT_WORKSPACE_GROUP_TITLE = 'PicPuck Agent 专用';
@@ -41,16 +45,87 @@ async function saveGroupMap(map) {
 }
 
 /**
- * 移除已失效的 groupId 映射（用户删组、合并窗口等）。
+ * 分组已解散/关闭后，`tabGroups.query` 仍可能短暂带出无效 id；须确认组仍存在、仍属本窗口且至少有一个 Tab。
+ * @param {number} windowId
+ * @param {number} groupId
+ * @returns {Promise<chrome.tabGroups.TabGroup | null>}
+ */
+async function getLiveTabGroupInWindow(windowId, groupId) {
+  if (typeof groupId !== 'number' || !Number.isFinite(groupId)) return null;
+  let tg;
+  try {
+    tg = await chrome.tabGroups.get(groupId);
+  } catch {
+    return null;
+  }
+  if (tg.windowId !== windowId) return null;
+  let tabs;
+  try {
+    tabs = await chrome.tabs.query({ windowId, groupId });
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(tabs) || tabs.length === 0) return null;
+  return tg;
+}
+
+/**
+ * @param {number} windowId
+ * @param {number} groupId
+ * @returns {Promise<boolean>}
+ */
+async function tabGroupIsLiveInWindow(windowId, groupId) {
+  const tg = await getLiveTabGroupInWindow(windowId, groupId);
+  return tg != null;
+}
+
+/**
+ * @param {number} windowId
+ * @param {chrome.tabGroups.TabGroup} g
+ * @returns {Promise<chrome.tabGroups.TabGroup | null>}
+ */
+async function refreshTabGroupIfLiveInWindow(windowId, g) {
+  return getLiveTabGroupInWindow(windowId, g.id);
+}
+
+/**
+ * `query` 结果只保留仍存活的分组，避免把已关闭分组当「已有 PicPuck 组」从而跳过合并、又去新建一组。
+ * @param {number} windowId
+ * @param {chrome.tabGroups.TabGroup[]} raw
+ * @returns {Promise<chrome.tabGroups.TabGroup[]>}
+ */
+async function filterLiveTabGroupsInWindow(windowId, raw) {
+  const out = await Promise.all(
+    raw.map(async (g) => {
+      const v = await refreshTabGroupIfLiveInWindow(windowId, g);
+      return v;
+    }),
+  );
+  return out.filter((x) => x != null);
+}
+
+/**
+ * 移除已失效映射：窗口已关、组已删、组已不在该窗口、或组内已无 Tab（用户关掉分组内所有标签后 session 仍可能指向旧 id）。
  */
 async function pruneStaleGroupMappings() {
   const map = await loadGroupMap();
   let changed = false;
   const next = { ...map };
   for (const [wStr, gid] of Object.entries(map)) {
+    const wid = Number(wStr);
+    if (!Number.isFinite(wid)) {
+      delete next[wStr];
+      changed = true;
+      continue;
+    }
     try {
-      await chrome.tabGroups.get(gid);
+      await chrome.windows.get(wid);
     } catch {
+      delete next[wStr];
+      changed = true;
+      continue;
+    }
+    if (!(await tabGroupIsLiveInWindow(wid, gid))) {
       delete next[wStr];
       changed = true;
     }
@@ -60,39 +135,40 @@ async function pruneStaleGroupMappings() {
   }
 }
 
+/**
+ * 专用工作区窗口关闭时由 `picpuckWorkspaceWindow` 调用：立刻删掉本窗口的分组映射，避免新窗口复用旧 windowId 逻辑混乱。
+ * @param {number} windowId
+ */
+export async function clearPicpuckWorkspaceGroupMappingForWindow(windowId) {
+  if (typeof windowId !== 'number' || !Number.isFinite(windowId)) return;
+  const map = await loadGroupMap();
+  const k = String(windowId);
+  if (map[k] == null) return;
+  const next = { ...map };
+  delete next[k];
+  await saveGroupMap(next);
+}
+
 async function getValidatedGroupIdForWindow(windowId) {
   const map = await loadGroupMap();
   const gid = map[String(windowId)];
   if (gid == null) return null;
-  try {
-    await chrome.tabGroups.get(gid);
+  if (await tabGroupIsLiveInWindow(windowId, gid)) {
     return gid;
-  } catch {
-    const next = { ...map };
-    delete next[String(windowId)];
-    await saveGroupMap(next);
-    return null;
   }
+  const next = { ...map };
+  delete next[String(windowId)];
+  await saveGroupMap(next);
+  return null;
 }
 
 /**
- * 扫描窗口内 PicPuck Agent 专用（或旧标题 PicPuck）、蓝色组；若存在多个则合并为一个。
+ * 合并窗口内多个 PicPuck 相关组为 canonical，并统一标题/颜色。
  * @param {number} windowId
- * @returns {Promise<number | null>} 合并后应使用的 groupId；无则 null
+ * @param {chrome.tabGroups.TabGroup[]} picpuck
+ * @returns {Promise<number>}
  */
-async function resolvePicpuckGroupIdInWindow(windowId) {
-  let groups;
-  try {
-    groups = await chrome.tabGroups.query({ windowId });
-  } catch {
-    return null;
-  }
-  const map = await loadGroupMap();
-  const sessionGid = map[String(windowId)];
-  const picpuck = groups.filter((g) => isPicpuckAgentWorkspaceGroup(g, sessionGid));
-  if (picpuck.length === 0) {
-    return null;
-  }
+async function mergePicpuckTabGroupsInWindow(windowId, picpuck) {
   if (picpuck.length === 1) {
     const only = picpuck[0].id;
     try {
@@ -128,25 +204,79 @@ async function resolvePicpuckGroupIdInWindow(windowId) {
 }
 
 /**
- * session 中的 groupId 与 Chrome 实际分组可能不一致；优先以窗口内真实 PicPuck 组为准并写回 session。
+ * 扫描窗口内 PicPuck 分组 ID：**先按组标题**（含旧标题 PicPuck）在 Chrome 里找，得到 id；无标题命中再回退 session（新建组标题尚未写回的瞬间）。
+ * @param {number} windowId
+ * @returns {Promise<number | null>} 合并后应使用的 groupId；无则 null
+ */
+async function resolvePicpuckGroupIdInWindow(windowId) {
+  let groups;
+  try {
+    groups = await chrome.tabGroups.query({ windowId });
+  } catch {
+    return null;
+  }
+  groups = await filterLiveTabGroupsInWindow(windowId, groups);
+  const map = await loadGroupMap();
+  const sessionGid = map[String(windowId)];
+
+  const byTitle = groups.filter((g) => workspaceGroupTitleMatches(g));
+  if (byTitle.length > 0) {
+    const canonical = await mergePicpuckTabGroupsInWindow(windowId, byTitle);
+    // session 曾指向「刚创建、尚无标题」的另一组时，只按标题会漏合并，把该组标签并入 canonical
+    if (sessionGid != null && sessionGid !== canonical) {
+      const sg = await getLiveTabGroupInWindow(windowId, sessionGid);
+      if (sg && !workspaceGroupTitleMatches(sg)) {
+        try {
+          const tabsIn = await chrome.tabs.query({ windowId, groupId: sessionGid });
+          const ids = tabsIn.map((t) => t.id).filter((id) => id != null);
+          if (ids.length > 0) {
+            await chrome.tabs.group({ groupId: canonical, tabIds: ids });
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    return canonical;
+  }
+
+  const picpuck = groups.filter((g) => isPicpuckAgentWorkspaceGroup(g, sessionGid));
+  if (picpuck.length === 0) {
+    return null;
+  }
+  return mergePicpuckTabGroupsInWindow(windowId, picpuck);
+}
+
+/**
+ * 以 Chrome 内**按标题识别到的组**为权威，得到 groupId 后写回 session；session 仅作「无标题瞬间」辅助，不作为优先依据。
  * @param {number} windowId
  * @returns {Promise<number | null>}
  */
 async function getOrSyncPicpuckGroupId(windowId) {
-  const fromSession = await getValidatedGroupIdForWindow(windowId);
   const fromChrome = await resolvePicpuckGroupIdInWindow(windowId);
   if (fromChrome != null) {
-    if (fromSession == null || fromSession !== fromChrome) {
-      const map = await loadGroupMap();
+    const map = await loadGroupMap();
+    if (map[String(windowId)] !== fromChrome) {
       map[String(windowId)] = fromChrome;
       await saveGroupMap(map);
     }
     return fromChrome;
   }
-  return fromSession;
+  return getValidatedGroupIdForWindow(windowId);
 }
 
-async function doEnsureTabInGroup(tabId, windowId) {
+/**
+ * **逻辑上的「单事务」**（仍须 `await`）：在**已由外层 Web Lock / Promise 链串行化**的前提下，
+ * 一次性完成：剪枝 session → 解析或合并有效 PicPuck 组 id → 把 `tabId` 并入该组 → 必要时创建新组并写 session 与标题。
+ *
+ * Chrome **不提供** `tabGroups` / `tabs` 的同步 API，因此无法实现 OS 意义下的阻塞式同步；本函数即为**不可再拆的异步原子序列**（勿在未持锁时并行调用）。
+ *
+ * @param {number} tabId
+ * @param {number} windowId
+ * @returns {Promise<void>}
+ */
+async function runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, windowId) {
+  await pruneStaleGroupMappings();
   let gid = await getOrSyncPicpuckGroupId(windowId);
   if (gid != null) {
     try {
@@ -184,22 +314,53 @@ async function doEnsureTabInGroup(tabId, windowId) {
   }
 
   const newGid = await chrome.tabs.group({ createProperties: { windowId }, tabIds: [tabId] });
-  await chrome.tabGroups.update(newGid, { title: PICPUCK_AGENT_WORKSPACE_GROUP_TITLE, color: 'blue' });
-  const map = await loadGroupMap();
-  map[String(windowId)] = newGid;
-  await saveGroupMap(map);
+  const mapNew = await loadGroupMap();
+  mapNew[String(windowId)] = newGid;
+  await saveGroupMap(mapNew);
+  try {
+    await chrome.tabGroups.update(newGid, { title: PICPUCK_AGENT_WORKSPACE_GROUP_TITLE, color: 'blue' });
+  } catch (e) {
+    console.warn('[PicPuck] tabGroups.update new workspace group failed', e);
+  }
 }
 
 /**
- * 将工作台 Tab 并入当前窗口的 PicPuck 蓝组（无则创建）。同窗口串行，避免并发双开组。
+ * Service Worker 专用窗口 id，供 Web Locks（与 windowId 组合，避免与其它上下文撞名）。
+ * @param {number} windowId
+ */
+function picpuckWorkspaceTabGroupLockName(windowId) {
+  return `picpuck-workspace-tabgroup-w${windowId}`;
+}
+
+/**
+ * **对外唯一入口**：保证 `tabId` 落在当前窗口的 PicPuck 工作区分组内（无则创建并登记 groupId）。
+ *
+ * **「原子」与「同步」**
+ * - Chrome **没有**标签分组 / 标签的**同步** API，扩展里无法写成不 `await` 的阻塞式同步方法。
+ * - **逻辑原子性**：用 `navigator.locks`（或回退 `winGroupChain`）保证同一 `windowId` 在任意时刻**只有一条**
+ *   `runPicpuckWorkspaceGroupEnsureAtomicSequence` 在执行，从而「查列表 → 取 id → 并入 / 创建 → 写 session」不会被另一条路径插队。
+ * - MV3 Service Worker 会休眠/重启，仅靠内存 Promise 链会丢串行；Web Locks 由浏览器持有，可跨 SW 激活边界。
+ *
  * @param {number} tabId
  */
 export async function ensureTabInPicpuckWorkspaceGroup(tabId) {
   const tab = await chrome.tabs.get(tabId);
   const wid = tab.windowId;
   if (wid == null) return;
+
+  const run = () => runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, wid);
+
+  if (typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function') {
+    try {
+      await navigator.locks.request(picpuckWorkspaceTabGroupLockName(wid), { mode: 'exclusive' }, run);
+      return;
+    } catch (e) {
+      console.warn('[PicPuck] navigator.locks.request tab group, fallback chain', e);
+    }
+  }
+
   const prev = winGroupChain.get(wid) ?? Promise.resolve();
-  const next = prev.then(() => doEnsureTabInGroup(tabId, wid));
+  const next = prev.then(run);
   winGroupChain.set(
     wid,
     next.catch((e) => {
@@ -218,12 +379,7 @@ async function matchesPicpuckWorkspaceGroupTab(tab, groupIdByWindowStr) {
   if (tab.groupId == null) return false;
   const expected = groupIdByWindowStr[String(tab.windowId)];
   if (expected == null || tab.groupId !== expected) return false;
-  try {
-    await chrome.tabGroups.get(expected);
-    return true;
-  } catch {
-    return false;
-  }
+  return tabGroupIsLiveInWindow(tab.windowId, expected);
 }
 
 /**
@@ -242,7 +398,7 @@ export async function isTabInPicpuckWorkspaceGroup(tab) {
 }
 
 /**
- * 在 `filterAndSortCandidates` 之后调用：只保留**已在 PicPuck 工作区组内**的同域 Tab。
+ * 在 `filterAndSortCandidates` 之后调用：专用窗口内同域 Tab 中，**已在蓝组内的优先**，其余未入组但 URL 已匹配的排在后（allocate 时会先 `ensureTabInPicpuckWorkspaceGroup` 再抢占）。
  * @param {chrome.tabs.Tab[]} tabsSorted
  * @returns {Promise<chrome.tabs.Tab[]>}
  */
@@ -256,11 +412,19 @@ export async function filterPicpuckWorkspaceCandidates(tabsSorted) {
     await getOrSyncPicpuckGroupId(wid);
   }
   const map = await loadGroupMap();
-  const out = [];
+  /** @type {chrome.tabs.Tab[]} */
+  const inGroup = [];
+  /** @type {chrome.tabs.Tab[]} */
+  const orphan = [];
   for (const tab of tabsSorted) {
     if (await matchesPicpuckWorkspaceGroupTab(tab, map)) {
-      out.push(tab);
+      inGroup.push(tab);
+    } else {
+      orphan.push(tab);
     }
   }
-  return out.sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
+  const byId = (a, b) => (a.id ?? 0) - (b.id ?? 0);
+  inGroup.sort(byId);
+  orphan.sort(byId);
+  return [...inGroup, ...orphan];
 }

@@ -43,7 +43,15 @@ export async function runDefaultProbeThenRelay(callerTabId, payload) {
       console.warn('[PicPuck] PATCH extension_run_phase failed', e);
     }
   }
-  const rr = await masterDispatch(crypto.randomUUID(), profile.relayCommand, { ...payload }, callerTabId);
+  const reuseTab =
+    typeof pr.tabId === 'number' && pr.tabId > 0 ? pr.tabId : undefined;
+  const rr = await masterDispatch(
+    crypto.randomUUID(),
+    profile.relayCommand,
+    { ...payload },
+    callerTabId,
+    reuseTab != null ? { reuseWorkTabId: reuseTab } : undefined,
+  );
   return { ...rr, probeOutcome: 'ready' };
 }
 

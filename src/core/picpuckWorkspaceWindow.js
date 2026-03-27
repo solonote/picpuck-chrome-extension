@@ -3,7 +3,13 @@
  * windowId 存 session；用户关闭窗口后 onRemoved 清缓存，下次 allocate 再建（默认 focused: false）。
  */
 
+import { clearPicpuckWorkspaceGroupMappingForWindow } from './picpuckWorkspaceTabGroup.js';
+
 const STORAGE_KEY = 'picpuckWorkspaceWindowId';
+
+/** 专用窗口初始尺寸（px，Chrome 会按显示器约束夹取）。略增高便于即梦/Gemini 编辑区与参考图。 */
+const WORKSPACE_WINDOW_WIDTH = 1280;
+const WORKSPACE_WINDOW_HEIGHT = 960;
 
 /** @type {Promise<number> | null} */
 let ensureInFlight = null;
@@ -14,7 +20,12 @@ let removedListenerInstalled = false;
  * @returns {Promise<number>} 专用工作区窗口 ID
  */
 async function createWorkspaceWindowAndStoreId() {
-  const w = await chrome.windows.create({ url: 'about:blank', focused: false });
+  const w = await chrome.windows.create({
+    url: 'about:blank',
+    focused: false,
+    width: WORKSPACE_WINDOW_WIDTH,
+    height: WORKSPACE_WINDOW_HEIGHT,
+  });
   const id = w.id;
   if (id == null || !Number.isFinite(id)) {
     throw new Error('PICPUCK_WORKSPACE_WINDOW_NO_ID');
@@ -63,6 +74,7 @@ export function installPicpuckWorkspaceWindowRemovedListener() {
         const sid = await chrome.storage.session.get(STORAGE_KEY);
         if (sid[STORAGE_KEY] === windowId) {
           await chrome.storage.session.remove(STORAGE_KEY);
+          await clearPicpuckWorkspaceGroupMappingForWindow(windowId);
         }
       } catch {
         /* ignore */

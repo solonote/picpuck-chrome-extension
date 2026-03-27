@@ -22,6 +22,8 @@
   const PICPUCK_ASYNC_GEN_PAGE = 'PICPUCK_ASYNC_GEN_PAGE';
 
   const TOPBAR_ID = 'picpuck-agent-topbar';
+  /** 与 Chrome 标签页标题一致：仅在工作台顶栏展示条件满足时写入，随页面改标题保持前缀（离开组或站点时卸掉）。 */
+  const PICPUCK_BROWSER_TAB_TITLE_PREFIX = 'PicPuck Agent - ';
   const COPY_FLASH_MS = 300;
   const TRIPLE_CLICK_MS = 600;
   /** Gemini Step13：整图已拦截后，在写系统剪贴板前争取把本 Tab 切回前台（用户可暂时离开） */
@@ -30,6 +32,57 @@
 
   /** Gemini step13：仅在 ARM～BUFFER/ABORT 之间挂一次监听，处理完或中止即移除 */
   let geminiClipboardBufferListener = null;
+
+  /** @type {MutationObserver | null} */
+  let picpuckTitlePrefixHeadObserver = null;
+
+  function teardownPicpuckBrowserTabTitlePrefix() {
+    if (picpuckTitlePrefixHeadObserver) {
+      try {
+        picpuckTitlePrefixHeadObserver.disconnect();
+      } catch {
+        /* ignore */
+      }
+      picpuckTitlePrefixHeadObserver = null;
+    }
+    try {
+      const t = document.title;
+      if (t.startsWith(PICPUCK_BROWSER_TAB_TITLE_PREFIX)) {
+        document.title = t.slice(PICPUCK_BROWSER_TAB_TITLE_PREFIX.length);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function setupPicpuckBrowserTabTitlePrefix() {
+    teardownPicpuckBrowserTabTitlePrefix();
+    const apply = () => {
+      try {
+        const t = document.title;
+        if (!t.startsWith(PICPUCK_BROWSER_TAB_TITLE_PREFIX)) {
+          document.title = PICPUCK_BROWSER_TAB_TITLE_PREFIX + t;
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    apply();
+    try {
+      picpuckTitlePrefixHeadObserver = new MutationObserver(() => {
+        apply();
+      });
+      if (document.head) {
+        picpuckTitlePrefixHeadObserver.observe(document.head, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        });
+      }
+    } catch {
+      picpuckTitlePrefixHeadObserver = null;
+    }
+  }
 
   function removeGeminiClipboardBufferListener() {
     if (geminiClipboardBufferListener) {
@@ -91,6 +144,7 @@
   function removeStalePicpuckTopbar() {
     if (!isWorkspaceSiteHost()) {
       removePicpuckTopbarDom();
+      teardownPicpuckBrowserTabTitlePrefix();
     }
   }
 
@@ -481,6 +535,7 @@
   async function applyRoundPhase(payload) {
     if (!(await shouldShowWorkspaceTopbar())) {
       removePicpuckTopbarDom();
+      teardownPicpuckBrowserTabTitlePrefix();
       return;
     }
     const { root, center } = ensureTopbarShell();
@@ -979,8 +1034,10 @@
     const eligible = await shouldShowWorkspaceTopbar();
     if (!eligible) {
       removePicpuckTopbarDom();
+      teardownPicpuckBrowserTabTitlePrefix();
       return;
     }
+    setupPicpuckBrowserTabTitlePrefix();
     ensureTopbarShell();
     async function finishTopbarPhase(payload) {
       await applyRoundPhase(payload);
