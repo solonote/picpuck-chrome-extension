@@ -32,5 +32,5 @@ chrome.runtime.onInstalled.addListener((details) => {
 
 console.info('[PicPuck SW] started, registered commands:', getRegisteredCommandCount());
 console.info(
-  '[PicPuck SW] 提示：点「生成/仅填词」等操作时请保持本 Service Worker 控制台打开；业务日志前缀均为 [PicPuck SW]（网页 F12 看不到这些行）。',
+  '[PicPuck SW] 提示：业务日志前缀 [PicPuck SW] 只在「扩展 Service Worker」控制台（非网页 F12）。若关掉整个专用浏览器窗口，下次会新开窗并为首张工作 Tab 新建标签组——这是 Chrome 行为；要复用同一 PicPuck 组请保留专用窗，只关里面的站点标签即可。',
 );

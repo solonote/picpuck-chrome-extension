@@ -2,7 +2,8 @@
  * PicPuck 专用工作区浏览器窗口：站点 Agent Tab 仅在此窗口内分配，与熔炉窗口分离。
  * windowId 存 session；**在 `windows.create` 之前**若 session 无效，会全局查找标题为 PicPuck 工作区的标签组并复用其窗口，避免叠窗叠组。
  * `windowId` 同时写 **session** 与 **local**：扩展重载会清空 session，local 仍在则复用同一专用窗，避免每次「新建窗 + 首张 Tab 必 createProperties」被误认为叠组。
- * 用户关闭专用窗后 onRemoved 清 session + local；无已存在组时再建（默认 focused: false）。
+ * 用户**关掉整个专用浏览器窗口**时，Chrome 会销毁该窗内所有标签组；下次 allocate 只能再 `windows.create` + 首张工作 Tab 再 `createProperties` 一组——**不是** session 失效的 bug。若需长期复用同一「PicPuck Agent 专用」组，请**不要关专用窗**（可只关里面的站点 Tab 或最小化窗口）。
+ * 用户关闭专用窗后 onRemoved 清 session + local。
  */
 
 import { chromeWindowIdStillExists } from './chromeWindowExists.js';
@@ -135,7 +136,9 @@ export async function ensurePicpuckWorkspaceWindow() {
       console.info('[PicPuck SW] 专用窗复用（create 前已有 PicPuck 标题组）windowId=', resurrected);
       return resurrected;
     }
-    console.info('[PicPuck SW] 将 windows.create 新建专用窗');
+    console.info(
+      '[PicPuck SW] 将 windows.create 新建专用窗（session/local/全局标题扫均无可用窗；若你刚关了专用窗，下一组标签组只能新建，Chrome 不会保留已关窗里的组）',
+    );
     return createWorkspaceWindowAndStoreId();
   };
 
@@ -154,6 +157,13 @@ export function installPicpuckWorkspaceWindowRemovedListener() {
   chrome.windows.onRemoved.addListener((windowId) => {
     void (async () => {
       try {
+        const sid = await chrome.storage.session.get(STORAGE_KEY);
+        const loc = await chrome.storage.local.get(LOCAL_KEY);
+        const wasWorkspace =
+          sid[STORAGE_KEY] === windowId || loc[LOCAL_KEY] === windowId;
+        if (wasWorkspace) {
+          console.info('[PicPuck SW] 专用窗已关闭，已清 session/local 组映射', { windowId });
+        }
         await clearPicpuckWorkspaceGroupMappingForWindow(windowId);
         await clearWorkspaceWindowIdFromStoresIfMatches(windowId);
       } catch {
