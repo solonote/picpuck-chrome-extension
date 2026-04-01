@@ -417,11 +417,13 @@ async function getOrSyncPicpuckGroupId(windowId) {
  * @returns {Promise<void>}
  */
 async function runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, windowId) {
+  console.info('[PicPuck SW] tabGroup 原子序列开始', { tabId, windowId });
   await pruneStaleGroupMappings();
   let gid = await getOrSyncPicpuckGroupId(windowId);
   if (gid != null) {
     try {
       await chrome.tabs.group({ groupId: gid, tabIds: [tabId] });
+      console.info('[PicPuck SW] tab 已并入已有 PicPuck 组', { tabId, windowId, groupId: gid });
       return;
     } catch (e) {
       console.warn('[PicPuck] tabs.group into PicPuck group failed', e);
@@ -506,6 +508,7 @@ async function runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, windowId) {
     }
   }
 
+  console.warn('[PicPuck SW] tabGroup 将新建标签组（此前 resolve 均为 null）', { tabId, windowId });
   const newGid = await chrome.tabs.group({ createProperties: { windowId }, tabIds: [tabId] });
   const mapNew = await loadGroupMap();
   mapNew[String(windowId)] = newGid;
@@ -513,8 +516,9 @@ async function runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, windowId) {
   try {
     await chrome.tabGroups.update(newGid, { title: PICPUCK_AGENT_WORKSPACE_GROUP_TITLE, color: 'blue' });
   } catch (e) {
-    console.warn('[PicPuck] tabGroups.update new workspace group failed', e);
+    console.warn('[PicPuck SW] tabGroups.update new workspace group failed', e);
   }
+  console.info('[PicPuck SW] tabGroup 已 createProperties', { tabId, windowId, newGroupId: newGid });
 }
 
 /**
@@ -540,6 +544,7 @@ export async function ensureTabInPicpuckWorkspaceGroup(tabId) {
   const tab = await chrome.tabs.get(tabId);
   const wid = tab.windowId;
   if (wid == null) return;
+  console.info('[PicPuck SW] ensureTabInPicpuckWorkspaceGroup', { tabId, windowId: wid });
 
   const run = () => runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, wid);
 
@@ -548,7 +553,7 @@ export async function ensureTabInPicpuckWorkspaceGroup(tabId) {
       await navigator.locks.request(picpuckWorkspaceTabGroupLockName(wid), { mode: 'exclusive' }, run);
       return;
     } catch (e) {
-      console.warn('[PicPuck] navigator.locks.request tab group, fallback chain', e);
+      console.warn('[PicPuck SW] navigator.locks.request tab group 回退 Promise 链', e);
     }
   }
 
@@ -557,7 +562,7 @@ export async function ensureTabInPicpuckWorkspaceGroup(tabId) {
   winGroupChain.set(
     wid,
     next.catch((e) => {
-      console.warn('[PicPuck] ensureTabInPicpuckWorkspaceGroup', e);
+      console.warn('[PicPuck SW] ensureTabInPicpuckWorkspaceGroup 链上异常', e);
     }),
   );
   await next;

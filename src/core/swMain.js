@@ -31,3 +31,6 @@ chrome.runtime.onInstalled.addListener((details) => {
 });
 
 console.info('[PicPuck SW] started, registered commands:', getRegisteredCommandCount());
+console.info(
+  '[PicPuck SW] 提示：点「生成/仅填词」等操作时请保持本 Service Worker 控制台打开；业务日志前缀均为 [PicPuck SW]（网页 F12 看不到这些行）。',
+);

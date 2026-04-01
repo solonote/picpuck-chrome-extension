@@ -59,6 +59,7 @@ export async function handlePicpuckAsyncGeneration(payload, sender) {
     return { ok: false, error: 'no tab' };
   }
   const phase = typeof payload.picpuckAsyncPhase === 'string' ? payload.picpuckAsyncPhase.trim() : '';
+  console.info('[PicPuck SW] picpuckAsyncGeneration', { phase: phase || '(empty)', tabId });
   if (phase === 'PRE') {
     const err = validateHandshakeFields(payload, { forbidAsyncJobId: true });
     if (err) return { ok: false, error: err };
@@ -102,7 +103,7 @@ export async function handlePicpuckAsyncGeneration(payload, sender) {
       client_handshake_id,
     });
     void dispatchAsyncGenerationFillOnly(tabId, merged).catch((e) => {
-      console.error('[PicPuck] dispatchAsyncGenerationFillOnly', e);
+      console.error('[PicPuck SW] dispatchAsyncGenerationFillOnly 失败', e);
     });
     return { ok: true, asyncGenHandled: true };
   }
@@ -134,7 +135,7 @@ export async function handlePicpuckAsyncGeneration(payload, sender) {
       async_job_id,
     });
     void dispatchAsyncGenerationLaunch(tabId, async_job_id).catch((e) => {
-      console.error('[PicPuck] dispatchAsyncGenerationLaunch', e);
+      console.error('[PicPuck SW] dispatchAsyncGenerationLaunch 失败', e);
     });
     return { ok: true, asyncGenHandled: true };
   }

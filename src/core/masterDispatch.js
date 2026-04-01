@@ -46,12 +46,18 @@ export async function masterDispatch(clientRequestId, command, payload, callerTa
     options && typeof options.reuseWorkTabId === 'number' && Number.isFinite(options.reuseWorkTabId)
       ? Math.floor(options.reuseWorkTabId)
       : undefined;
+  console.info('[PicPuck SW] masterDispatch', {
+    command,
+    roundShort: roundId.slice(0, 8),
+    callerTabId: callerTabId && callerTabId > 0 ? callerTabId : undefined,
+  });
   // 工作 Tab：按 CommandRecord.homeUrl/taskBaseUrl 全量 query 后筛选并抢占或新建（core/allocateTab）
   const alloc = await allocateTab(command, {
     reuseWorkTabId: reuse,
     asyncJobId: typeof payload?.async_job_id === 'string' ? payload.async_job_id : undefined,
   });
   if (!alloc.ok) {
+    console.warn('[PicPuck SW] allocateTab 失败', { command, errorCode: alloc.errorCode, message: alloc.message });
     return {
       ok: false,
       roundId,

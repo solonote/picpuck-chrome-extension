@@ -88,7 +88,9 @@ export async function allocateTab(command, allocateOpts) {
       : await getRecoverCheckFocusWorkTab();
   }
 
+  console.info('[PicPuck SW] allocateTab → ensurePicpuckWorkspaceWindow', { command });
   const workspaceWindowId = await ensurePicpuckWorkspaceWindow();
+  console.info('[PicPuck SW] allocateTab workspaceWindowId=', workspaceWindowId);
 
   const jobNorm = normalizeAsyncJobId(allocateOpts?.asyncJobId);
   if (jobNorm) {

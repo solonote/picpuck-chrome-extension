@@ -51,7 +51,7 @@ async function resolveWorkspaceWindowIdFromSession() {
   try {
     await chrome.tabs.query({ windowId: raw });
   } catch (e) {
-    console.warn('[PicPuck] workspace window id in session not queryable, clearing', raw, e);
+    console.warn('[PicPuck SW] workspace window id in session not queryable, clearing', raw, e);
     await chrome.storage.session.remove(STORAGE_KEY);
     await clearPicpuckWorkspaceGroupMappingForWindow(raw);
     return null;
@@ -66,20 +66,25 @@ async function resolveWorkspaceWindowIdFromSession() {
  */
 export async function ensurePicpuckWorkspaceWindow() {
   const run = async () => {
+    console.info('[PicPuck SW] ensurePicpuckWorkspaceWindow 进入');
     const existing = await resolveWorkspaceWindowIdFromSession();
-    if (existing != null) return existing;
+    if (existing != null) {
+      console.info('[PicPuck SW] 专用窗来自 session windowId=', existing);
+      return existing;
+    }
     const resurrected = await findExistingWorkspaceWindowIdByPicpuckGroupTitle();
     if (resurrected != null) {
       try {
         await chrome.tabs.query({ windowId: resurrected });
       } catch (e) {
-        console.warn('[PicPuck] 按标签组标题找回的专用窗无法 query，将新建窗口', resurrected, e);
+        console.warn('[PicPuck SW] 按标签组标题找回的专用窗无法 query，将新建窗口', resurrected, e);
         return createWorkspaceWindowAndStoreId();
       }
       await chrome.storage.session.set({ [STORAGE_KEY]: resurrected });
-      console.info('[PicPuck] 专用工作区窗口复用（create 前已存在 PicPuck 标题组）windowId=', resurrected);
+      console.info('[PicPuck SW] 专用窗复用（create 前已有 PicPuck 标题组）windowId=', resurrected);
       return resurrected;
     }
+    console.info('[PicPuck SW] 将 windows.create 新建专用窗');
     return createWorkspaceWindowAndStoreId();
   };
 
