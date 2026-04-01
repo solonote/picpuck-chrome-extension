@@ -185,17 +185,35 @@ export async function dispatchRound(args) {
           level: 'info',
           message: 'Step99.info.asyncRecoverWatchLoopRegistered async_job_id=' + aj,
         });
+      } else if (!ajOk) {
+        /** 无 12 位 async_job_id：即梦「仅填词」等路径故意不跑 step19，无锚点、也不该有 WatchLoop；空 id 不是故障。非空但格式错才是问题。 */
+        const mode = payload && payload.jimengSubmitMode;
+        if (aj.length > 0) {
+          console.warn('[PicPuck] WatchLoop 未开启', {
+            reason: 'bad_async_job_id',
+            async_job_id: aj,
+            submitMode: mode,
+            hint: 'async_job_id 须为 12 位 [a-z0-9]',
+          });
+        }
+        appendLog(tabId, {
+          ts: Date.now(),
+          roundId,
+          step: 'system',
+          level: 'info',
+          message:
+            aj.length > 0
+              ? 'Step99.info.watchLoopSkipped reason=bad_async_job_id async_job_id=' + aj
+              : 'Step99.info.watchLoopSkipped reason=no_async_job_id（无异步任务 id，不登记 WatchLoop；仅填词属正常）' +
+                (mode != null ? ' submitMode=' + String(mode) : ''),
+        });
       } else {
         const mode = payload && payload.jimengSubmitMode;
-        const reason = !hasAnchor ? 'no_anchor' : 'bad_async_job_id';
         console.warn('[PicPuck] WatchLoop 未开启', {
-          reason,
-          async_job_id: aj || '(empty)',
+          reason: 'no_anchor',
+          async_job_id: aj,
           submitMode: mode,
-          hint:
-            reason === 'no_anchor'
-              ? 'LAUNCH 结束时 profile.hasLaunchAnchor 为假（锚点步骤未写入或失败）'
-              : 'async_job_id 须为 12 位 [a-z0-9]',
+          hint: 'LAUNCH 已带 async_job_id 但 profile.hasLaunchAnchor 为假（锚点步骤未写入或失败）',
         });
         appendLog(tabId, {
           ts: Date.now(),
@@ -203,9 +221,7 @@ export async function dispatchRound(args) {
           step: 'system',
           level: 'info',
           message:
-            'Step99.info.watchLoopSkipped reason=' +
-            reason +
-            (mode != null ? ' submitMode=' + String(mode) : ''),
+            'Step99.info.watchLoopSkipped reason=no_anchor' + (mode != null ? ' submitMode=' + String(mode) : ''),
         });
       }
     }
