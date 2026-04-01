@@ -3,6 +3,7 @@
  * windowId 存 session；用户关闭窗口后 onRemoved 清缓存，下次 allocate 再建（默认 focused: false）。
  */
 
+import { chromeWindowIdStillExists } from './chromeWindowExists.js';
 import { clearPicpuckWorkspaceGroupMappingForWindow } from './picpuckWorkspaceTabGroup.js';
 
 const STORAGE_KEY = 'picpuckWorkspaceWindowId';
@@ -10,9 +11,6 @@ const STORAGE_KEY = 'picpuckWorkspaceWindowId';
 /** 专用窗口初始尺寸（px，Chrome 会按显示器约束夹取）。略增高便于即梦/Gemini 编辑区与参考图。 */
 const WORKSPACE_WINDOW_WIDTH = 1280;
 const WORKSPACE_WINDOW_HEIGHT = 960;
-
-/** @type {Promise<number> | null} */
-let ensureInFlight = null;
 
 let removedListenerInstalled = false;
 
@@ -34,32 +32,45 @@ async function createWorkspaceWindowAndStoreId() {
   return id;
 }
 
+async function resolveWorkspaceWindowIdFromSession() {
+  const sid = await chrome.storage.session.get(STORAGE_KEY);
+  const raw = sid[STORAGE_KEY];
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) {
+    return null;
+  }
+  if (!(await chromeWindowIdStillExists(raw))) {
+    await chrome.storage.session.remove(STORAGE_KEY);
+    await clearPicpuckWorkspaceGroupMappingForWindow(raw);
+    return null;
+  }
+  // `windows.get/getAll` 偶发与真实可调度窗口脱节；再验一次 tabs，避免 session 指向已死窗却仍去 W2 里开 Tab、却在「以为的」旧窗上留映射/重复建组。
+  try {
+    await chrome.tabs.query({ windowId: raw });
+  } catch (e) {
+    console.warn('[PicPuck] workspace window id in session not queryable, clearing', raw, e);
+    await chrome.storage.session.remove(STORAGE_KEY);
+    await clearPicpuckWorkspaceGroupMappingForWindow(raw);
+    return null;
+  }
+  return raw;
+}
+
 /**
  * 返回当前专用工作区窗口 ID；不存在或失效则创建（不抢 OS 焦点）。
+ * Web Locks 串行化，避免并发 `create` 出多个专用窗（与 picpuckWorkspaceTabGroup 同理）。
  * @returns {Promise<number>}
  */
 export async function ensurePicpuckWorkspaceWindow() {
-  if (ensureInFlight) {
-    return ensureInFlight;
+  const run = async () => {
+    const existing = await resolveWorkspaceWindowIdFromSession();
+    if (existing != null) return existing;
+    return createWorkspaceWindowAndStoreId();
+  };
+
+  if (typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function') {
+    return navigator.locks.request('picpuck-workspace-window-ensure', { mode: 'exclusive' }, run);
   }
-  ensureInFlight = (async () => {
-    try {
-      const sid = await chrome.storage.session.get(STORAGE_KEY);
-      const raw = sid[STORAGE_KEY];
-      if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
-        try {
-          await chrome.windows.get(raw);
-          return raw;
-        } catch {
-          await chrome.storage.session.remove(STORAGE_KEY);
-        }
-      }
-      return await createWorkspaceWindowAndStoreId();
-    } finally {
-      ensureInFlight = null;
-    }
-  })();
-  return ensureInFlight;
+  return run();
 }
 
 /**
@@ -71,10 +82,10 @@ export function installPicpuckWorkspaceWindowRemovedListener() {
   chrome.windows.onRemoved.addListener((windowId) => {
     void (async () => {
       try {
+        await clearPicpuckWorkspaceGroupMappingForWindow(windowId);
         const sid = await chrome.storage.session.get(STORAGE_KEY);
         if (sid[STORAGE_KEY] === windowId) {
           await chrome.storage.session.remove(STORAGE_KEY);
-          await clearPicpuckWorkspaceGroupMappingForWindow(windowId);
         }
       } catch {
         /* ignore */

@@ -3,33 +3,17 @@
  * **解析 groupId：先在当前窗口用组标题匹配**（含旧标题 PicPuck），有则合并多组并采用该 id；无标题命中再用 session 辅助「新建尚未写标题」的瞬间。不以 session 为优先，避免与真实已命名组脱节。
  * `allocateTab`：`filterPicpuckWorkspaceCandidates` 会纳入**专用窗口内**同 homeUrl 但未入蓝组的 Tab（优先尝试并入组并复用），避免已开 Gemini 仍 `tabs.create` 重复开页。
  *
- * **分组列表**：使用 `chrome.tabGroups.query({ windowId })` 可拿到当前窗口分组；另用 `tabGroups.get` + `tabs.query({ groupId })` 过滤已解散/无 Tab 的残留项。重复建组常见根因是**并发**（见 `ensureTabInPicpuckWorkspaceGroup` 中 Web Locks 说明），而非「读不到列表」。
+ * **分组列表**：使用 `chrome.tabGroups.query({ windowId })` 可拿到当前窗口分组；另用 `tabGroups.get` + `tabs.query({ groupId })` 过滤已解散/无 Tab 的残留项。重复建组常见根因：**并发**（Web Locks）、**`tabGroups.query` 滞后**（仅微任务重扫不够）、或 **session 指向已死窗口**（见 `picpuckWorkspaceWindow` 内 `tabs.query` 校验）。`createProperties` 前用**有界** `setTimeout` 重扫，避免误判「无组」再建一组。
  * **查/建/取 id 的一体化**：见 `runPicpuckWorkspaceGroupEnsureAtomicSequence`（仅能在锁内跑）；对外只调 `ensureTabInPicpuckWorkspaceGroup`。平台无同步 API，故为 async「单事务」而非字面同步。
  */
+import { chromeWindowIdStillExists } from './chromeWindowExists.js';
+
 /** @readonly 与 UI 展示一致；旧版标题「PicPuck」仍识别并迁移为本标题。 */
 export const PICPUCK_AGENT_WORKSPACE_GROUP_TITLE = 'PicPuck Agent 专用';
 
 const LEGACY_WORKSPACE_GROUP_TITLE = 'PicPuck';
 
 const STORAGE_KEY = 'picpuckWorkspaceGroupByWindow';
-
-// #region agent log
-/** @param {string} msg @param {Record<string, unknown>} data @param {string} hypothesisId */
-function __dbgPicpuckTabGroup(msg, data, hypothesisId) {
-  fetch('http://127.0.0.1:7580/ingest/950995e1-d0ac-4671-9d6d-791b255470ef', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '2e5487' },
-    body: JSON.stringify({
-      sessionId: '2e5487',
-      location: 'picpuckWorkspaceTabGroup.js',
-      message: msg,
-      data,
-      timestamp: Date.now(),
-      hypothesisId,
-    }),
-  }).catch(() => {});
-}
-// #endregion
 
 /**
  * 仅以组标题识别工作区分组（trim）。新建组在 `tabGroups.update` 生效前常为灰、标题空，不能再用 color===blue 否则扫描不到、会误建第二个同名组。
@@ -77,14 +61,20 @@ async function getLiveTabGroupInWindow(windowId, groupId) {
     return null;
   }
   if (tg.windowId !== windowId) return null;
-  let tabs;
-  try {
-    tabs = await chrome.tabs.query({ windowId, groupId });
-  } catch {
-    return null;
+  /** `tabs.group` 并入瞬间 `tabs.query` 可能短暂为空，误判「组已死」会触发第二组；有界短等重试。 */
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let tabs;
+    try {
+      tabs = await chrome.tabs.query({ windowId, groupId });
+    } catch {
+      return null;
+    }
+    if (Array.isArray(tabs) && tabs.length > 0) return tg;
+    if (attempt + 1 < 3) {
+      await new Promise((r) => setTimeout(r, 30));
+    }
   }
-  if (!Array.isArray(tabs) || tabs.length === 0) return null;
-  return tg;
+  return null;
 }
 
 /**
@@ -136,9 +126,7 @@ async function pruneStaleGroupMappings() {
       changed = true;
       continue;
     }
-    try {
-      await chrome.windows.get(wid);
-    } catch {
+    if (!(await chromeWindowIdStillExists(wid))) {
       delete next[wStr];
       changed = true;
       continue;
@@ -222,7 +210,7 @@ async function mergePicpuckTabGroupsInWindow(windowId, picpuck) {
 }
 
 /**
- * `tabGroups.query({ windowId })` 在部分时序下会瞬时返回 []（runtime：debug-2e5487 第2行 raw=0，约 1s 后同 window raw=1）。
+ * `tabGroups.query({ windowId })` 在部分时序下会瞬时返回 []。
  * 回退为 `query({})` 再按 windowId 过滤，避免误判「无组」而连开多个 createProperties。
  * @param {number} windowId
  * @returns {Promise<{ groups: chrome.tabGroups.TabGroup[], usedGlobalFallback: boolean }>}
@@ -247,32 +235,37 @@ async function queryTabGroupsForWindowRobust(windowId) {
 }
 
 /**
+ * 新窗口或刚并入组后，`tabGroups.query` 可能仍短暂为空；仅 `await Promise.resolve()` 让出微任务后重扫，禁止 setTimeout。
+ * @param {number} windowId
+ * @param {number} maxAttempts
+ * @returns {Promise<number | null>}
+ */
+async function resolvePicpuckGroupIdInWindowWithYieldRetries(windowId, maxAttempts) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const gid = await resolvePicpuckGroupIdInWindow(windowId);
+    if (gid != null) {
+      return gid;
+    }
+    if (attempt + 1 < maxAttempts) {
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+  }
+  return null;
+}
+
+/**
  * 扫描窗口内 PicPuck 分组 ID：**先按组标题**（含旧标题 PicPuck）在 Chrome 里找，得到 id；无标题命中再回退 session（新建组标题尚未写回的瞬间）。
  * @param {number} windowId
  * @returns {Promise<number | null>} 合并后应使用的 groupId；无则 null
  */
 async function resolvePicpuckGroupIdInWindow(windowId) {
-  const { groups: rawGroups, usedGlobalFallback } = await queryTabGroupsForWindowRobust(windowId);
-  const rawCount = rawGroups.length;
+  const { groups: rawGroups } = await queryTabGroupsForWindowRobust(windowId);
   let groups = await filterLiveTabGroupsInWindow(windowId, rawGroups);
   const map = await loadGroupMap();
   const sessionGid = map[String(windowId)];
 
   const byTitle = groups.filter((g) => workspaceGroupTitleMatches(g));
-  // #region agent log
-  __dbgPicpuckTabGroup(
-    'resolvePicpuckGroupIdInWindow',
-    {
-      windowId,
-      rawTabGroupCount: rawCount,
-      usedGlobalQueryFallback: usedGlobalFallback,
-      liveAfterFilterCount: groups.length,
-      byTitleCount: byTitle.length,
-      sessionGid: sessionGid ?? null,
-    },
-    'H-B,H-D,H-E',
-  );
-  // #endregion
   if (byTitle.length > 0) {
     const canonical = await mergePicpuckTabGroupsInWindow(windowId, byTitle);
     // session 曾指向「刚创建、尚无标题」的另一组时，只按标题会漏合并，把该组标签并入 canonical
@@ -295,13 +288,6 @@ async function resolvePicpuckGroupIdInWindow(windowId) {
 
   const picpuck = groups.filter((g) => isPicpuckAgentWorkspaceGroup(g, sessionGid));
   if (picpuck.length === 0) {
-    // #region agent log
-    __dbgPicpuckTabGroup(
-      'resolvePicpuckGroupIdInWindow_null',
-      { windowId, picpuckFallbackLen: 0, sessionGid: sessionGid ?? null },
-      'H-D',
-    );
-    // #endregion
     return null;
   }
   return mergePicpuckTabGroupsInWindow(windowId, picpuck);
@@ -338,30 +324,11 @@ async function getOrSyncPicpuckGroupId(windowId) {
 async function runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, windowId) {
   await pruneStaleGroupMappings();
   let gid = await getOrSyncPicpuckGroupId(windowId);
-  // #region agent log
-  __dbgPicpuckTabGroup(
-    'ensureSequence_start',
-    { tabId, windowId, gidAfterGetOrSync: gid ?? null },
-    'H-D,H-E',
-  );
-  // #endregion
   if (gid != null) {
     try {
       await chrome.tabs.group({ groupId: gid, tabIds: [tabId] });
       return;
     } catch (e) {
-      // #region agent log
-      __dbgPicpuckTabGroup(
-        'tabs_group_into_existing_failed',
-        {
-          tabId,
-          windowId,
-          gid,
-          err: e instanceof Error ? e.message : String(e),
-        },
-        'H-C',
-      );
-      // #endregion
       console.warn('[PicPuck] tabs.group into PicPuck group failed', e);
       gid = await resolvePicpuckGroupIdInWindow(windowId);
       if (gid != null) {
@@ -405,13 +372,6 @@ async function runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, windowId) {
         if (workspaceGroupTitleMatches(tgLive) || isPicpuckAgentWorkspaceGroup(tgLive, sess)) {
           mapSnap[String(windowId)] = tgLive.id;
           await saveGroupMap(mapSnap);
-          // #region agent log
-          __dbgPicpuckTabGroup(
-            'ensureSequence_skip_create_already_in_picpuck',
-            { tabId, windowId, groupId: gFromTab },
-            'post-fix',
-          );
-          // #endregion
           return;
         }
       }
@@ -420,21 +380,38 @@ async function runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, windowId) {
     /* ignore */
   }
 
-  // #region agent log
-  __dbgPicpuckTabGroup(
-    'createProperties_new_tab_group',
-    { tabId, windowId, lastGidBeforeCreate: gid ?? null },
-    'H-A,H-B,H-C,H-D',
-  );
-  // #endregion
+  gid = await resolvePicpuckGroupIdInWindowWithYieldRetries(windowId, 4);
+  if (gid != null) {
+    const mapYield = await loadGroupMap();
+    mapYield[String(windowId)] = gid;
+    await saveGroupMap(mapYield);
+    try {
+      await chrome.tabs.group({ groupId: gid, tabIds: [tabId] });
+      return;
+    } catch (e) {
+      console.warn('[PicPuck] tabs.group after yield-retry resolve failed', e);
+    }
+  }
+
+  /** 最后一道：微任务后 Chrome 仍可能未把新组暴露给 `tabGroups.query`，再短延迟重扫，避免同窗叠两个「PicPuck Agent 专用」。 */
+  for (let waitAttempt = 0; waitAttempt < 6; waitAttempt++) {
+    if (waitAttempt > 0) {
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    gid = await resolvePicpuckGroupIdInWindow(windowId);
+    if (gid == null) continue;
+    const mapWait = await loadGroupMap();
+    mapWait[String(windowId)] = gid;
+    await saveGroupMap(mapWait);
+    try {
+      await chrome.tabs.group({ groupId: gid, tabIds: [tabId] });
+      return;
+    } catch (e) {
+      console.warn('[PicPuck] tabs.group after timed resolve retry failed', e);
+    }
+  }
+
   const newGid = await chrome.tabs.group({ createProperties: { windowId }, tabIds: [tabId] });
-  // #region agent log
-  __dbgPicpuckTabGroup(
-    'created_new_group',
-    { tabId, windowId, newGid },
-    'H-A,H-C',
-  );
-  // #endregion
   const mapNew = await loadGroupMap();
   mapNew[String(windowId)] = newGid;
   await saveGroupMap(mapNew);
@@ -473,26 +450,13 @@ export async function ensureTabInPicpuckWorkspaceGroup(tabId) {
 
   if (typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function') {
     try {
-      // #region agent log
-      __dbgPicpuckTabGroup('ensureTab_locks_path', { tabId, wid }, 'H-A');
-      // #endregion
       await navigator.locks.request(picpuckWorkspaceTabGroupLockName(wid), { mode: 'exclusive' }, run);
       return;
     } catch (e) {
-      // #region agent log
-      __dbgPicpuckTabGroup(
-        'ensureTab_locks_failed_fallback_chain',
-        { tabId, wid, err: e instanceof Error ? e.message : String(e) },
-        'H-A',
-      );
-      // #endregion
       console.warn('[PicPuck] navigator.locks.request tab group, fallback chain', e);
     }
   }
 
-  // #region agent log
-  __dbgPicpuckTabGroup('ensureTab_promise_chain_fallback', { tabId, wid }, 'H-A');
-  // #endregion
   const prev = winGroupChain.get(wid) ?? Promise.resolve();
   const next = prev.then(run);
   winGroupChain.set(
