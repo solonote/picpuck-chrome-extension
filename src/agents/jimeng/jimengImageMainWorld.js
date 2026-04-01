@@ -2189,6 +2189,37 @@
     return null;
   }
 
+  /** 即梦全局 Message 失败态，如 `<span class="lv-message-content">复制失败，请重试</span>` */
+  function jimengTextIndicatesCopyFailure(t) {
+    if (!t || typeof t !== 'string') return false;
+    return t.indexOf('复制失败') !== -1;
+  }
+
+  function findVisibleJimengCopyFailureToast() {
+    var nodes = doc.querySelectorAll(
+      '.lv-message-content, [class*="lv-message-content"], [class*="lv-message-error"], [class*="message-error"], [class*="arco-message-error"]',
+    );
+    var i;
+    var el;
+    var t;
+    for (i = 0; i < nodes.length; i++) {
+      el = nodes[i];
+      if (!isElementVisible(el)) continue;
+      t = el.textContent || '';
+      if (jimengTextIndicatesCopyFailure(t)) return el;
+    }
+    nodes = doc.querySelectorAll(
+      '[class*="lv-message-wrapper"], [class*="arco-message"], [class*="semi-toast"], [class*="message-wrapper"]',
+    );
+    for (i = 0; i < nodes.length; i++) {
+      el = nodes[i];
+      if (!isElementVisible(el)) continue;
+      t = el.textContent || '';
+      if (jimengTextIndicatesCopyFailure(t) && !jimengTextIndicatesCopySuccess(t)) return el;
+    }
+    return null;
+  }
+
   function tryDismissJimengFloatingUi() {
     try {
       doc.dispatchEvent(
@@ -2425,6 +2456,33 @@
 
   var STEP21_TAB_ACTIVATE_MAX_WAIT_MS = 25000;
   var STEP21_TAB_VISIBLE_SETTLE_MS = 400;
+  /** 即梦 SPA：`readyState===complete` 后再等一段时间再右键复制，避免 UI/懒加载未稳。 */
+  var STEP21_PAGE_LOAD_COMPLETE_WAIT_MAX_MS = 30000;
+  var STEP21_AFTER_LOAD_COMPLETE_BEFORE_COPY_MS = 3000;
+
+  /**
+   * @param {string} roundId
+   * @param {string} stepKey
+   * @param {number} maxMs
+   * @returns {Promise<boolean>}
+   */
+  async function waitDocumentReadyStateCompleteForStep21(roundId, stepKey, maxMs) {
+    var deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+      if (document.readyState === 'complete') {
+        appendMainLog(roundId, stepKey, 'info', 'Step21.info.documentReadyStateComplete');
+        return true;
+      }
+      await delay(50);
+    }
+    appendMainLog(
+      roundId,
+      stepKey,
+      'info',
+      'Step21.info.documentReadyStateWaitTimeout state=' + (document.readyState || ''),
+    );
+    return false;
+  }
 
   /**
    * Step21 右键/剪贴板依赖前台 Tab；MAIN 无 chrome.*，经 postMessage → SW `focusWorkTab`，再等到 `visibilityState===visible`。
@@ -2482,6 +2540,14 @@
     if (!visRes || visRes.ok !== true) {
       return visRes || { ok: false, code: 'JIMENG_COLLECT_TAB_ACTIVATE_TIMEOUT' };
     }
+    await waitDocumentReadyStateCompleteForStep21(roundId, stepKey, STEP21_PAGE_LOAD_COMPLETE_WAIT_MAX_MS);
+    appendMainLog(
+      roundId,
+      stepKey,
+      'info',
+      'Step21.info.waitAfterLoadBeforeCopy ms=' + STEP21_AFTER_LOAD_COMPLETE_BEFORE_COPY_MS,
+    );
+    await delay(STEP21_AFTER_LOAD_COMPLETE_BEFORE_COPY_MS);
     appendMainLog(roundId, stepKey, 'info', 'Step21.开始从即梦结果区逐张复制图片+目标张数=' + n);
     var alignDeadline = Date.now() + 20000;
     var imgs0 = [];
@@ -2591,6 +2657,21 @@
         var sawProgress = false;
         var tProg = Date.now() + COPY_PROGRESS_WAIT_MS;
         while (Date.now() < tProg) {
+          if (findVisibleJimengCopyFailureToast()) {
+            appendMainLog(
+              roundId,
+              stepKey,
+              'debug',
+              'Step21.debug.copyFailureToastDuringProgress a=' + copyAttempt,
+            );
+            tryDismissJimengFloatingUi();
+            await delay(450);
+            if (copyAttempt >= COPY_RETRY_MAX) {
+              appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制失败提示且重试耗尽');
+              return { ok: false, code: 'JIMENG_COPY_TOAST_FAILED' };
+            }
+            continue copyRetry;
+          }
           if (findVisibleJimengCopyDownloadToast()) {
             sawProgress = true;
             break;
@@ -2615,6 +2696,21 @@
         var sawSuccessToast = false;
         var tOk = Date.now() + COPY_SUCCESS_WAIT_MS;
         while (Date.now() < tOk) {
+          if (findVisibleJimengCopyFailureToast()) {
+            appendMainLog(
+              roundId,
+              stepKey,
+              'debug',
+              'Step21.debug.copyFailureToastBeforeSuccess a=' + copyAttempt,
+            );
+            tryDismissJimengFloatingUi();
+            await delay(450);
+            if (copyAttempt >= COPY_RETRY_MAX) {
+              appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制失败提示且重试耗尽');
+              return { ok: false, code: 'JIMENG_COPY_TOAST_FAILED' };
+            }
+            continue copyRetry;
+          }
           if (findVisibleJimengCopySuccessToast()) {
             sawSuccessToast = true;
             break;
@@ -2635,6 +2731,21 @@
         clipRes = await waitJimengClipboardReadFromIsolatedWorld(roundId, prevB64, clipReadMs);
         if (!clipRes || !clipRes.ok || typeof clipRes.imageBase64 !== 'string' || !clipRes.imageBase64) {
           appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.clipboardEmptyOrTimeout firstPass a=' + copyAttempt);
+          if (findVisibleJimengCopyFailureToast()) {
+            appendMainLog(
+              roundId,
+              stepKey,
+              'debug',
+              'Step21.debug.copyFailureToastAfterClipboardMiss a=' + copyAttempt,
+            );
+            tryDismissJimengFloatingUi();
+            await delay(450);
+            if (copyAttempt >= COPY_RETRY_MAX) {
+              appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制失败提示且重试耗尽');
+              return { ok: false, code: 'JIMENG_COPY_TOAST_FAILED' };
+            }
+            continue copyRetry;
+          }
           await delay(400);
           clipRes = await waitJimengClipboardReadFromIsolatedWorld(roundId, prevB64, clipReadMs);
         }
@@ -2795,33 +2906,28 @@
       appendMainLog(roundId, stepKey, 'info', 'Step04.即梦记录上尚无结果槽位或未完成');
       return { ok: true, outcome: 'not_ready' };
     }
-    /** 后台 Tab：结构槽齐但 decode 为 0；全量回收前 Step21 会请求激活 Tab。探查阶段 probeOnly 时仍报 ready，由后续 RELAY 轮聚焦再收集。 */
+    /** 后台 Tab：结构槽齐但 decode 为 0。RELAY 须继续走 Step21（内会先 focus 再收集）；勿在此返回 not_ready，否则永远进不了 Step21。probeOnly 仅记录日志，仍返回 ready。 */
     var probeOnly = !!(payload && payload.probeOnly === true);
     if (n >= 1 && validDecoded.length < 1 && document.hidden) {
-      if (!probeOnly) {
+      if (probeOnly) {
         appendMainLog(
           roundId,
           stepKey,
           'info',
-          'Step04.info.后台Tab无已解码结果图+Step21暂不执行+延后取回 structuralN=' +
+          'Step04.info.probeOnly.hiddenStructuralReady structuralN=' + structuralN + ' httpsSlots=' + slotsHttps.length,
+        );
+      } else {
+        appendMainLog(
+          roundId,
+          stepKey,
+          'info',
+          'Step04.info.hiddenTabNoDecodedYet structuralN=' +
             structuralN +
             ' httpsSlots=' +
-            slotsHttps.length,
+            slotsHttps.length +
+            '+继续Step21将先激活Tab',
         );
-        logRecoverDomBrief(roundId, stepKey, 'hidden_tab_no_decoded_for_step21', doc, root, anchor, {
-          slotsCount: slotsHttps.length,
-          validCount: validDecoded.length,
-          structuralN: structuralN,
-          n: n,
-        });
-        return { ok: true, outcome: 'not_ready' };
       }
-      appendMainLog(
-        roundId,
-        stepKey,
-        'info',
-        'Step04.info.probeOnly.hiddenStructuralReady structuralN=' + structuralN + ' httpsSlots=' + slotsHttps.length,
-      );
     }
     logRecoverDomSnapshot(recoverDomVerbose, roundId, stepKey, 'before_step21_collect', doc, root, anchor, {
       slotsCount: slotsHttps.length,

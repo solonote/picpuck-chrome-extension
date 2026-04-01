@@ -791,7 +791,7 @@ export async function step04_jimeng_recover_probe_only(ctx) {
   ctx.jimengCollectedImages = [];
 }
 
-/** JIMENG_ASYNC_RELAY：在探查已判定可收集后执行页内收集 + 回传（Step21 内会先请求激活工作 Tab）。 */
+/** JIMENG_ASYNC_RELAY：在探查已判定可收集后执行页内收集 + 回传（Step21 内会再等 visible；此处先 focus 避免后台 Tab lazy/右键菜单失败）。 */
 export async function step04_jimeng_recover_collect(ctx) {
   const { tabId, roundId, payload } = ctx;
   const stepKey = 'step04_jimeng_recover_fetch';
@@ -800,6 +800,8 @@ export async function step04_jimeng_recover_collect(ctx) {
     throw new Error('JIMENG_RECOVER_NO_ANCHOR');
   }
   ctx.jimengRecordAnchor = payload.jimengRecordAnchor;
+  logStepInfo(tabId, roundId, stepKey, 4, '回收取图前聚焦工作 Tab');
+  await focusWorkTab(tabId);
   const r = await execJimengRecoverMainRunner(ctx, {
     nn: 4,
     stepKey,

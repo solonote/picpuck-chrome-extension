@@ -22,7 +22,7 @@ import {
 } from './relayImagePayloadChunked.js';
 import { handlePicpuckAsyncGeneration } from './asyncGenerationHandlers.js';
 import { dispatchAsyncGenerationRecover } from './asyncRecoverDispatch.js';
-import { isTabInPicpuckWorkspaceGroup } from './picpuckWorkspaceTabGroup.js';
+import { isTabInPicpuckWorkspaceWindow } from './picpuckWorkspaceWindow.js';
 import { focusWorkTab } from './allocateTab.js';
 
 /** 与 `frontend-v2/src/utils/picpuckExtension.js` 中 PICPUCK_EXTENSION_COMMAND 一致 */
@@ -129,7 +129,7 @@ export function installRuntimeMessageHandlers() {
         return true;
       }
       // 为遵守「仅三种 runtime type」约定：内部动作走 PICPUCK_COMMAND，不新增第四 type（见分阶段清单说明）
-      /** 即梦/Gemini：仅 PicPuck 蓝组内 Tab 显示顶栏；CS 无可靠 tabs API 时由 SW 判定 */
+      /** 即梦/Gemini：仅 PicPuck 专用窗内 Tab 显示顶栏；CS 无可靠 tabs API 时由 SW 判定 */
       if (payload.action === '__picpuckWorkspaceTopbarEligible') {
         (async () => {
           try {
@@ -139,7 +139,7 @@ export function installRuntimeMessageHandlers() {
               return;
             }
             const tab = await chrome.tabs.get(tabId);
-            const eligible = await isTabInPicpuckWorkspaceGroup(tab);
+            const eligible = await isTabInPicpuckWorkspaceWindow(tab);
             sendResponse({ ok: true, eligible });
           } catch {
             sendResponse({ ok: true, eligible: false });

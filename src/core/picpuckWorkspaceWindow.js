@@ -1,12 +1,8 @@
 /**
  * PicPuck 专用工作区浏览器窗口：站点 Agent Tab 仅在此窗口内分配。
+ * 不再使用 Chrome 标签页分组（专用窗已隔离；分组 id 无法可靠清理与复用）。
  * windowId 存 `chrome.storage.session`；关闭窗口时 onRemoved 清除。
  */
-
-import {
-  clearPicpuckWorkspaceGroupMappingForWindow,
-  getRecordedWorkspaceTabGroupIds,
-} from './picpuckWorkspaceTabGroup.js';
 
 const STORAGE_KEY = 'picpuckWorkspaceWindowId';
 const WORKSPACE_WINDOW_WIDTH = 1280;
@@ -27,36 +23,6 @@ async function windowStillOpen(windowId) {
  * @returns {Promise<number>}
  */
 async function createWorkspaceWindowAndStoreId() {
-  try {
-    const ids = await getRecordedWorkspaceTabGroupIds();
-    /** @type {unknown[]} */
-    const results = [];
-    for (const groupId of ids) {
-      try {
-        const g = await chrome.tabGroups.get(groupId);
-        results.push({
-          ok: true,
-          id: g.id,
-          title: g.title,
-          windowId: g.windowId,
-          collapsed: g.collapsed,
-        });
-      } catch (err) {
-        results.push({
-          ok: false,
-          id: groupId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-    console.log('[PicPuck] windows.create 前 按持久化 id 调用 tabGroups.get（对比 query，测未激活态是否可读）', {
-      storedIdCount: ids.length,
-      results,
-    });
-  } catch (e) {
-    console.log('[PicPuck] windows.create 前 持久化 id → tabGroups.get 探测失败', e);
-  }
-
   const w = await chrome.windows.create({
     url: 'about:blank',
     focused: false,
@@ -79,14 +45,12 @@ async function resolveWorkspaceWindowIdFromSession() {
   }
   if (!(await windowStillOpen(raw))) {
     await chrome.storage.session.remove(STORAGE_KEY);
-    await clearPicpuckWorkspaceGroupMappingForWindow(raw);
     return null;
   }
   try {
     await chrome.tabs.query({ windowId: raw });
   } catch {
     await chrome.storage.session.remove(STORAGE_KEY);
-    await clearPicpuckWorkspaceGroupMappingForWindow(raw);
     return null;
   }
   return raw;
@@ -108,13 +72,25 @@ export async function ensurePicpuckWorkspaceWindow() {
   return run();
 }
 
+/**
+ * 是否当前 session 登记的专用窗内的 Tab（用于顶栏是否挂载等；不再依赖 tabGroups）。
+ * @param {chrome.tabs.Tab | undefined} tab
+ * @returns {Promise<boolean>}
+ */
+export async function isTabInPicpuckWorkspaceWindow(tab) {
+  if (!tab || typeof tab.windowId !== 'number') return false;
+  const sid = await chrome.storage.session.get(STORAGE_KEY);
+  const wid = sid[STORAGE_KEY];
+  if (typeof wid !== 'number' || !Number.isFinite(wid)) return false;
+  return tab.windowId === wid;
+}
+
 export function installPicpuckWorkspaceWindowRemovedListener() {
   if (removedListenerInstalled) return;
   removedListenerInstalled = true;
   chrome.windows.onRemoved.addListener((windowId) => {
     void (async () => {
       try {
-        await clearPicpuckWorkspaceGroupMappingForWindow(windowId);
         const sid = await chrome.storage.session.get(STORAGE_KEY);
         if (sid[STORAGE_KEY] === windowId) {
           await chrome.storage.session.remove(STORAGE_KEY);
