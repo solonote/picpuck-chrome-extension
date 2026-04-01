@@ -508,7 +508,20 @@ async function runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, windowId) {
     }
   }
 
-  console.warn('[PicPuck SW] tabGroup 将新建标签组（此前 resolve 均为 null）', { tabId, windowId });
+  const snap = await collectTabGroupDescriptorsForWindow(windowId);
+  const snapF = await filterQueryGroupsStillInWindow(windowId, snap);
+  if (snapF.length === 0) {
+    console.info('[PicPuck SW] tabGroup 本窗尚无存活组 → 首张工作 Tab 首次 createProperties（正常，非叠组）', {
+      tabId,
+      windowId,
+    });
+  } else {
+    console.warn('[PicPuck SW] tabGroup 本窗已有组却未 resolve → 将再 create（异常，可能叠组）', {
+      tabId,
+      windowId,
+      groups: snapF.map((g) => ({ id: g.id, title: g.title, color: g.color })),
+    });
+  }
   const newGid = await chrome.tabs.group({ createProperties: { windowId }, tabIds: [tabId] });
   const mapNew = await loadGroupMap();
   mapNew[String(windowId)] = newGid;
