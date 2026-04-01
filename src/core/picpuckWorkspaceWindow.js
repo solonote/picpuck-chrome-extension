@@ -3,7 +3,10 @@
  * windowId 存 `chrome.storage.session`；关闭窗口时 onRemoved 清除。
  */
 
-import { clearPicpuckWorkspaceGroupMappingForWindow } from './picpuckWorkspaceTabGroup.js';
+import {
+  clearPicpuckWorkspaceGroupMappingForWindow,
+  getRecordedWorkspaceTabGroupIds,
+} from './picpuckWorkspaceTabGroup.js';
 
 const STORAGE_KEY = 'picpuckWorkspaceWindowId';
 const WORKSPACE_WINDOW_WIDTH = 1280;
@@ -25,19 +28,33 @@ async function windowStillOpen(windowId) {
  */
 async function createWorkspaceWindowAndStoreId() {
   try {
-    const allGroups = await chrome.tabGroups.query({});
-    const queryRows = (allGroups || []).map((g) => ({
-      id: g.id,
-      title: g.title,
-      windowId: g.windowId,
-    }));
-    console.log('[PicPuck] windows.create 前 tabGroups.query({})', {
-      note: '专用窗关闭后或浏览器刚打开时，分组/窗口常处于未激活态：query 往往为空；此时扩展侧也拿不到对应 Tab，无法用 tab.groupId 反查分组。要复用只能另做持久化等方案，不能指望本步枚举。',
-      count: queryRows.length,
-      groups: queryRows,
+    const ids = await getRecordedWorkspaceTabGroupIds();
+    /** @type {unknown[]} */
+    const results = [];
+    for (const groupId of ids) {
+      try {
+        const g = await chrome.tabGroups.get(groupId);
+        results.push({
+          ok: true,
+          id: g.id,
+          title: g.title,
+          windowId: g.windowId,
+          collapsed: g.collapsed,
+        });
+      } catch (err) {
+        results.push({
+          ok: false,
+          id: groupId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    console.log('[PicPuck] windows.create 前 按持久化 id 调用 tabGroups.get（对比 query，测未激活态是否可读）', {
+      storedIdCount: ids.length,
+      results,
     });
   } catch (e) {
-    console.log('[PicPuck] windows.create 前 tabGroups.query({}) 失败', e);
+    console.log('[PicPuck] windows.create 前 持久化 id → tabGroups.get 探测失败', e);
   }
 
   const w = await chrome.windows.create({

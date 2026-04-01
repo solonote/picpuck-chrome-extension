@@ -7,6 +7,30 @@ export const PICPUCK_AGENT_WORKSPACE_GROUP_TITLE = 'PicPuck Agent 专用';
 
 const LEGACY_WORKSPACE_GROUP_TITLE = 'PicPuck';
 const STORAGE_KEY = 'picpuckWorkspaceGroupByWindow';
+/** PicPuck 曾创建或并入的工作区分组 id，存 local 供冷启动/未激活态下用 get(id) 探测（非 query） */
+const LOCAL_RECORDED_GROUP_IDS_KEY = 'picpuckRecordedWorkspaceTabGroupIds';
+
+/**
+ * @returns {Promise<number[]>}
+ */
+export async function getRecordedWorkspaceTabGroupIds() {
+  const raw = await chrome.storage.local.get(LOCAL_RECORDED_GROUP_IDS_KEY);
+  const arr = raw[LOCAL_RECORDED_GROUP_IDS_KEY];
+  if (!Array.isArray(arr)) return [];
+  return [...new Set(arr.filter((x) => typeof x === 'number' && Number.isFinite(x) && x >= 0))];
+}
+
+/**
+ * @param {number} gid
+ */
+async function recordWorkspaceTabGroupId(gid) {
+  if (typeof gid !== 'number' || !Number.isFinite(gid) || gid < 0) return;
+  const raw = await chrome.storage.local.get(LOCAL_RECORDED_GROUP_IDS_KEY);
+  const prev = Array.isArray(raw[LOCAL_RECORDED_GROUP_IDS_KEY]) ? raw[LOCAL_RECORDED_GROUP_IDS_KEY] : [];
+  if (prev.includes(gid)) return;
+  const next = [...prev, gid];
+  await chrome.storage.local.set({ [LOCAL_RECORDED_GROUP_IDS_KEY]: next });
+}
 
 /** @type {Map<number, Promise<void>>} */
 const winGroupChain = new Map();
@@ -112,6 +136,7 @@ async function runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, windowId) {
       const tg = await chrome.tabGroups.get(gid);
       if (tg.windowId === windowId) {
         await chrome.tabs.group({ groupId: gid, tabIds: [tabId] });
+        await recordWorkspaceTabGroupId(gid);
         return;
       }
     } catch {
@@ -124,6 +149,7 @@ async function runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, windowId) {
   if (hit != null) {
     map[k] = hit.id;
     await saveGroupMap(map);
+    await recordWorkspaceTabGroupId(hit.id);
     try {
       await chrome.tabs.group({ groupId: hit.id, tabIds: [tabId] });
       return;
@@ -135,6 +161,7 @@ async function runPicpuckWorkspaceGroupEnsureAtomicSequence(tabId, windowId) {
   const newGid = await chrome.tabs.group({ createProperties: { windowId }, tabIds: [tabId] });
   map[k] = newGid;
   await saveGroupMap(map);
+  await recordWorkspaceTabGroupId(newGid);
   try {
     await chrome.tabGroups.update(newGid, { title: PICPUCK_AGENT_WORKSPACE_GROUP_TITLE, color: 'blue' });
   } catch {
@@ -218,6 +245,7 @@ export async function filterPicpuckWorkspaceCandidates(tabsSorted) {
     const hit = groups.find((g) => workspaceGroupTitleMatches(g));
     if (hit != null) {
       map[String(wid)] = hit.id;
+      await recordWorkspaceTabGroupId(hit.id);
     }
   }
   await saveGroupMap(map);
