@@ -13,9 +13,11 @@ import {
 } from './asyncWatchLoopRegistry.js';
 import { dispatchAsyncGenerationRecover } from './asyncRecoverDispatch.js';
 import { installPicpuckWorkspaceWindowRemovedListener } from './picpuckWorkspaceWindow.js';
+import { installPicpuckTabGroupsOnUpdatedDebugListener } from './picpuckWorkspaceTabGroup.js';
 
 setDispatchAsyncGenerationRecoverForWatchLoop(dispatchAsyncGenerationRecover);
 installPicpuckWorkspaceWindowRemovedListener();
+installPicpuckTabGroupsOnUpdatedDebugListener();
 installWatchLoopAlarmHandling();
 installTabRemovedHandler();
 installRuntimeMessageHandlers();

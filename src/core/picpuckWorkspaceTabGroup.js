@@ -264,3 +264,20 @@ export async function filterPicpuckWorkspaceCandidates(tabsSorted) {
   orphan.sort(byId);
   return [...inGroup, ...orphan];
 }
+
+let tabGroupsOnUpdatedDebugInstalled = false;
+
+/** 调试用：观察关闭窗口等操作时 Chromium 是否触发 tabGroups.onUpdated */
+export function installPicpuckTabGroupsOnUpdatedDebugListener() {
+  if (tabGroupsOnUpdatedDebugInstalled) return;
+  tabGroupsOnUpdatedDebugInstalled = true;
+  chrome.tabGroups.onUpdated.addListener((group) => {
+    console.log('[PicPuck] tabGroups.onUpdated', {
+      id: group.id,
+      title: group.title,
+      windowId: group.windowId,
+      collapsed: group.collapsed,
+      color: group.color,
+    });
+  });
+}
