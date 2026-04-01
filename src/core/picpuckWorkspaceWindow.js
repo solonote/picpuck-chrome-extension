@@ -1,10 +1,14 @@
 /**
  * PicPuck 专用工作区浏览器窗口：站点 Agent Tab 仅在此窗口内分配，与熔炉窗口分离。
- * windowId 存 session；用户关闭窗口后 onRemoved 清缓存，下次 allocate 再建（默认 focused: false）。
+ * windowId 存 session；**在 `windows.create` 之前**若 session 无效，会全局查找标题为 PicPuck 工作区的标签组并复用其窗口，避免叠窗叠组。
+ * 用户关闭窗口后 onRemoved 清缓存；无已存在组时再建（默认 focused: false）。
  */
 
 import { chromeWindowIdStillExists } from './chromeWindowExists.js';
-import { clearPicpuckWorkspaceGroupMappingForWindow } from './picpuckWorkspaceTabGroup.js';
+import {
+  clearPicpuckWorkspaceGroupMappingForWindow,
+  findExistingWorkspaceWindowIdByPicpuckGroupTitle,
+} from './picpuckWorkspaceTabGroup.js';
 
 const STORAGE_KEY = 'picpuckWorkspaceWindowId';
 
@@ -64,6 +68,18 @@ export async function ensurePicpuckWorkspaceWindow() {
   const run = async () => {
     const existing = await resolveWorkspaceWindowIdFromSession();
     if (existing != null) return existing;
+    const resurrected = await findExistingWorkspaceWindowIdByPicpuckGroupTitle();
+    if (resurrected != null) {
+      try {
+        await chrome.tabs.query({ windowId: resurrected });
+      } catch (e) {
+        console.warn('[PicPuck] 按标签组标题找回的专用窗无法 query，将新建窗口', resurrected, e);
+        return createWorkspaceWindowAndStoreId();
+      }
+      await chrome.storage.session.set({ [STORAGE_KEY]: resurrected });
+      console.info('[PicPuck] 专用工作区窗口复用（create 前已存在 PicPuck 标题组）windowId=', resurrected);
+      return resurrected;
+    }
     return createWorkspaceWindowAndStoreId();
   };
 

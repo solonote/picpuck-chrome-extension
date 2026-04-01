@@ -60,12 +60,6 @@ async function saveGroupMap(map) {
 }
 
 /**
- * 分组已解散/关闭后，`tabGroups.query` 仍可能短暂带出无效 id；须确认组仍存在、仍属本窗口且至少有一个 Tab。
- * @param {number} windowId
- * @param {number} groupId
- * @returns {Promise<chrome.tabGroups.TabGroup | null>}
- */
-/**
  * 组是否仍被 Chrome 持有且属于该窗口（**不**要求此时 `tabs.query` 已能列出标签）。
  * 用于剪枝与 resolve 列表：避免把「并入中、查询瞬时空」的存活组当成死组。
  */
@@ -174,6 +168,39 @@ export async function clearPicpuckWorkspaceGroupMappingForWindow(windowId) {
   const next = { ...map };
   delete next[k];
   await saveGroupMap(next);
+}
+
+/**
+ * 供 `ensurePicpuckWorkspaceWindow` 在 **`windows.create` 之前**调用：全局扫描标题为 PicPuck 工作区的标签组，
+ * 若组与所属窗口仍有效则返回该 `windowId`（多窗命中时取最小 id，行为稳定）。
+ * 解决 session 已空（SW 重启等）但专用窗未关时仍新建窗口 → 再开一组的问题。
+ * **仅认标题**（不认无标题蓝组），避免误认用户其它窗口里的手动分组。
+ *
+ * @returns {Promise<number | null>}
+ */
+export async function findExistingWorkspaceWindowIdByPicpuckGroupTitle() {
+  let all = [];
+  try {
+    all = await chrome.tabGroups.query({});
+  } catch {
+    return null;
+  }
+  const seenW = new Set();
+  /** @type {number[]} */
+  const wids = [];
+  for (const g of all) {
+    if (!workspaceGroupTitleMatches(g)) continue;
+    const wid = g.windowId;
+    if (typeof wid !== 'number' || !Number.isFinite(wid)) continue;
+    if (seenW.has(wid)) continue;
+    if (!(await tabGroupEntityBelongsToWindow(wid, g.id))) continue;
+    if (!(await chromeWindowIdStillExists(wid))) continue;
+    seenW.add(wid);
+    wids.push(wid);
+  }
+  if (wids.length === 0) return null;
+  wids.sort((a, b) => a - b);
+  return wids[0];
 }
 
 async function getValidatedGroupIdForWindow(windowId) {
