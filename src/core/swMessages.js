@@ -391,7 +391,6 @@ export function installRuntimeMessageHandlers() {
             sendResponse({ ok: false, error: 'missing action' });
             return;
           }
-          console.info('[PicPuck SW] PICPUCK_COMMAND 页桥', { action });
           const rec = getCommandRecordByPicpuckAction(action);
           if (!rec) {
             sendResponse({ ok: false, error: 'unknown action: ' + action });

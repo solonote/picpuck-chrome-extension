@@ -46,7 +46,6 @@ function selectLaunchCommandAndPayload({ pending, fillOnly, asyncJobId }) {
  * @param {Record<string, unknown>} mergedPayload PRE 合并字段（须含 `fillOnly: true`）
  */
 export async function dispatchAsyncGenerationFillOnly(callerTabId, mergedPayload) {
-  console.info('[PicPuck SW] FILL_DISPATCH → Token → masterDispatch', { callerTabId });
   await ensureMcupExtensionAccessTokenOrThrow();
   const pending = mergedPayload && typeof mergedPayload === 'object' ? mergedPayload : {};
   const { command, payload } = selectLaunchCommandAndPayload({ pending, fillOnly: true });
@@ -59,7 +58,6 @@ export async function dispatchAsyncGenerationFillOnly(callerTabId, mergedPayload
  * @param {string} asyncJobId 12 位
  */
 export async function dispatchAsyncGenerationLaunch(callerTabId, asyncJobId) {
-  console.info('[PicPuck SW] DISPATCH → Token → masterDispatch', { callerTabId, asyncJobId });
   await ensureMcupExtensionAccessTokenOrThrow();
   const pending = pendingPreSlot;
   if (!pending || typeof pending !== 'object') {
