@@ -21,17 +21,58 @@ async function windowStillOpen(windowId) {
 }
 
 /**
+ * 通过全量 tabs 上的 groupId + tabGroups.get，列出当前能看到的分组（含 windowId），用于和 query 结果对照。
+ * @returns {Promise<Array<{ id: number, title: string, windowId: number }>>}
+ */
+async function listTabGroupsViaTabsEnumerate() {
+  const tabs = await chrome.tabs.query({});
+  const groupIds = new Set();
+  for (const t of tabs) {
+    const gid = t.groupId;
+    if (typeof gid === 'number' && gid >= 0) {
+      groupIds.add(gid);
+    }
+  }
+  /** @type {Array<{ id: number, title: string, windowId: number }>} */
+  const out = [];
+  for (const gid of groupIds) {
+    try {
+      const g = await chrome.tabGroups.get(gid);
+      out.push({ id: g.id, title: String(g.title ?? ''), windowId: g.windowId });
+    } catch {
+      /* 组已消失 */
+    }
+  }
+  return out;
+}
+
+/**
  * @returns {Promise<number>}
  */
 async function createWorkspaceWindowAndStoreId() {
   try {
     const allGroups = await chrome.tabGroups.query({});
-    console.log(
-      '[PicPuck] windows.create 前 chrome.tabGroups.query({})',
-      (allGroups || []).map((g) => ({ id: g.id, title: g.title })),
-    );
+    const queryRows = (allGroups || []).map((g) => ({
+      id: g.id,
+      title: g.title,
+      windowId: g.windowId,
+    }));
+    console.log('[PicPuck] windows.create 前 tabGroups.query({})', {
+      count: queryRows.length,
+      groups: queryRows,
+    });
   } catch (e) {
-    console.log('[PicPuck] windows.create 前 chrome.tabGroups.query({}) 失败', e);
+    console.log('[PicPuck] windows.create 前 tabGroups.query({}) 失败', e);
+  }
+
+  try {
+    const viaTabs = await listTabGroupsViaTabsEnumerate();
+    console.log('[PicPuck] windows.create 前 tabs 枚举 + tabGroups.get', {
+      count: viaTabs.length,
+      groups: viaTabs,
+    });
+  } catch (e) {
+    console.log('[PicPuck] windows.create 前 tabs 枚举分组 失败', e);
   }
 
   const w = await chrome.windows.create({
