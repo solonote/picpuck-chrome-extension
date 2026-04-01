@@ -7,6 +7,7 @@
  * **查/建/取 id 的一体化**：见 `runPicpuckWorkspaceGroupEnsureAtomicSequence`（仅能在锁内跑）；对外只调 `ensureTabInPicpuckWorkspaceGroup`。平台无同步 API，故为 async「单事务」而非字面同步。
  */
 import { chromeWindowIdStillExists } from './chromeWindowExists.js';
+import { getAllCommandRecords } from './registry.js';
 
 /** @readonly 与 UI 展示一致；旧版标题「PicPuck」仍识别并迁移为本标题。 */
 export const PICPUCK_AGENT_WORKSPACE_GROUP_TITLE = 'PicPuck Agent 专用';
@@ -171,36 +172,118 @@ export async function clearPicpuckWorkspaceGroupMappingForWindow(windowId) {
 }
 
 /**
- * 供 `ensurePicpuckWorkspaceWindow` 在 **`windows.create` 之前**调用：全局扫描标题为 PicPuck 工作区的标签组，
- * 若组与所属窗口仍有效则返回该 `windowId`（多窗命中时取最小 id，行为稳定）。
- * 解决 session 已空（SW 重启等）但专用窗未关时仍新建窗口 → 再开一组的问题。
- * **仅认标题**（不认无标题蓝组），避免误认用户其它窗口里的手动分组。
+ * 窗口内是否存在至少一个 Tab，其 URL 前缀命中已注册 `CommandRecord.homeUrl`（Gemini/即梦等工作区站点）。
+ * 用于把「无标题蓝组」限定在真实工作区窗，避免误认主窗口里用户手动的蓝组。
+ */
+async function workspaceWindowHasRegisteredSiteTab(windowId) {
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ windowId });
+  } catch {
+    return false;
+  }
+  const prefixes = new Set();
+  for (const r of getAllCommandRecords()) {
+    const h = typeof r.homeUrl === 'string' ? r.homeUrl.trim() : '';
+    if (h.startsWith('http')) prefixes.add(h);
+  }
+  if (prefixes.size === 0) return false;
+  for (const t of tabs) {
+    const u = (t.url || t.pendingUrl || '').trim();
+    if (!u.startsWith('http')) continue;
+    for (const h of prefixes) {
+      if (u.startsWith(h)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * **`windows.create` 之前**必须调用：全局枚举标签组（`query({})` 空时按窗口再扫一遍），再决定能否复用已有窗。
+ * 优先级：0 标题为 PicPuck 工作区；1 session `picpuckWorkspaceGroupByWindow` 中登记的 gid 仍属该窗；
+ * 2 无标题且 blue，且该窗内已有已注册站点 Tab（常见：`tabGroups.update` 标题尚未写回、仅标题扫会漏）。
  *
  * @returns {Promise<number | null>}
  */
-export async function findExistingWorkspaceWindowIdByPicpuckGroupTitle() {
+export async function findExistingWorkspaceWindowIdByGlobalTabGroupScan() {
+  const map = await loadGroupMap();
   let all = [];
   try {
     all = await chrome.tabGroups.query({});
   } catch {
-    return null;
+    all = [];
   }
-  const seenW = new Set();
-  /** @type {number[]} */
-  const wids = [];
+  if (all.length === 0) {
+    try {
+      const wins = await chrome.windows.getAll({ populate: false });
+      for (const w of wins) {
+        if (w.id == null || typeof w.id !== 'number') continue;
+        let sub = [];
+        try {
+          sub = await chrome.tabGroups.query({ windowId: w.id });
+        } catch {
+          continue;
+        }
+        all.push(...sub);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** @type {Map<number, number>} windowId → 最优优先级（越小越可信） */
+  const best = new Map();
+  const consider = (wid, prio) => {
+    if (typeof wid !== 'number' || !Number.isFinite(wid)) return;
+    const prev = best.get(wid);
+    if (prev == null || prio < prev) best.set(wid, prio);
+  };
+
   for (const g of all) {
-    if (!workspaceGroupTitleMatches(g)) continue;
     const wid = g.windowId;
     if (typeof wid !== 'number' || !Number.isFinite(wid)) continue;
-    if (seenW.has(wid)) continue;
     if (!(await tabGroupEntityBelongsToWindow(wid, g.id))) continue;
-    if (!(await chromeWindowIdStillExists(wid))) continue;
-    seenW.add(wid);
-    wids.push(wid);
+
+    if (workspaceGroupTitleMatches(g)) {
+      consider(wid, 0);
+      continue;
+    }
+    const sessGid = map[String(wid)];
+    if (sessGid != null && sessGid === g.id) {
+      consider(wid, 1);
+      continue;
+    }
+    if (isUntitledBlueWorkspaceLikelyOurs(g) && (await workspaceWindowHasRegisteredSiteTab(wid))) {
+      consider(wid, 2);
+    }
   }
-  if (wids.length === 0) return null;
-  wids.sort((a, b) => a - b);
-  return wids[0];
+
+  const ranked = [...best.entries()].sort((a, b) => {
+    if (a[1] !== b[1]) return a[1] - b[1];
+    return a[0] - b[0];
+  });
+
+  for (const [wid, prio] of ranked) {
+    if (!(await chromeWindowIdStillExists(wid))) continue;
+    try {
+      await chrome.tabs.query({ windowId: wid });
+    } catch {
+      continue;
+    }
+    console.info('[PicPuck SW] create 前全局标签组扫描命中复用窗', {
+      windowId: wid,
+      matchPriority: prio,
+      hint: prio === 0 ? 'title' : prio === 1 ? 'session_gid' : 'untitled_blue+site_tab',
+    });
+    return wid;
+  }
+  console.info('[PicPuck SW] create 前全局标签组扫描未命中可复用窗', { scannedGroups: all.length });
+  return null;
+}
+
+/** @deprecated 使用 {@link findExistingWorkspaceWindowIdByGlobalTabGroupScan} */
+export async function findExistingWorkspaceWindowIdByPicpuckGroupTitle() {
+  return findExistingWorkspaceWindowIdByGlobalTabGroupScan();
 }
 
 async function getValidatedGroupIdForWindow(windowId) {

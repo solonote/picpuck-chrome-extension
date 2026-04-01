@@ -1,15 +1,14 @@
 /**
  * PicPuck 专用工作区浏览器窗口：站点 Agent Tab 仅在此窗口内分配，与熔炉窗口分离。
- * windowId 存 session；**在 `windows.create` 之前**若 session 无效，会全局查找标题为 PicPuck 工作区的标签组并复用其窗口，避免叠窗叠组。
- * `windowId` 同时写 **session** 与 **local**：扩展重载会清空 session，local 仍在则复用同一专用窗，避免每次「新建窗 + 首张 Tab 必 createProperties」被误认为叠组。
- * 用户**关掉整个专用浏览器窗口**时，Chrome 会销毁该窗内所有标签组；下次 allocate 只能再 `windows.create` + 首张工作 Tab 再 `createProperties` 一组——**不是** session 失效的 bug。若需长期复用同一「PicPuck Agent 专用」组，请**不要关专用窗**（可只关里面的站点 Tab 或最小化窗口）。
+ * `windowId` 写 **session** 与 **local**（重载扩展时 session 会丢，local 仍可找回未关的专用窗）。
+ * **`windows.create` 之前**必跑 **`findExistingWorkspaceWindowIdByGlobalTabGroupScan`**：全局枚举标签组，按标题 / session 登记的 gid /（无标题蓝组 + 窗内已有已注册站点 Tab）复用窗，避免未扫组就叠新窗。
  * 用户关闭专用窗后 onRemoved 清 session + local。
  */
 
 import { chromeWindowIdStillExists } from './chromeWindowExists.js';
 import {
   clearPicpuckWorkspaceGroupMappingForWindow,
-  findExistingWorkspaceWindowIdByPicpuckGroupTitle,
+  findExistingWorkspaceWindowIdByGlobalTabGroupScan,
 } from './picpuckWorkspaceTabGroup.js';
 
 const STORAGE_KEY = 'picpuckWorkspaceWindowId';
@@ -124,21 +123,19 @@ export async function ensurePicpuckWorkspaceWindow() {
       console.info('[PicPuck SW] 专用窗来自 local（session 已空，常见于扩展重载）windowId=', fromLocal);
       return fromLocal;
     }
-    const resurrected = await findExistingWorkspaceWindowIdByPicpuckGroupTitle();
+    const resurrected = await findExistingWorkspaceWindowIdByGlobalTabGroupScan();
     if (resurrected != null) {
       try {
         await chrome.tabs.query({ windowId: resurrected });
       } catch (e) {
-        console.warn('[PicPuck SW] 按标签组标题找回的专用窗无法 query，将新建窗口', resurrected, e);
+        console.warn('[PicPuck SW] 全局组扫描命中窗无法 tabs.query，将新建窗口', resurrected, e);
         return createWorkspaceWindowAndStoreId();
       }
       await persistWorkspaceWindowIdToStores(resurrected);
-      console.info('[PicPuck SW] 专用窗复用（create 前已有 PicPuck 标题组）windowId=', resurrected);
+      console.info('[PicPuck SW] 专用窗复用（create 前全局标签组扫描）windowId=', resurrected);
       return resurrected;
     }
-    console.info(
-      '[PicPuck SW] 将 windows.create 新建专用窗（session/local/全局标题扫均无可用窗；若你刚关了专用窗，下一组标签组只能新建，Chrome 不会保留已关窗里的组）',
-    );
+    console.info('[PicPuck SW] 将 windows.create 新建专用窗（session/local/全局组扫描均无可用窗）');
     return createWorkspaceWindowAndStoreId();
   };
 
