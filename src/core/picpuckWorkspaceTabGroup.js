@@ -3,7 +3,7 @@
  * **解析 groupId：先在当前窗口用组标题匹配**（含旧标题 PicPuck），有则合并多组并采用该 id；无标题命中再用 session 辅助「新建尚未写标题」的瞬间。不以 session 为优先，避免与真实已命名组脱节。
  * `allocateTab`：`filterPicpuckWorkspaceCandidates` 会纳入**专用窗口内**同 homeUrl 但未入蓝组的 Tab（优先尝试并入组并复用），避免已开 Gemini 仍 `tabs.create` 重复开页。
  *
- * **分组列表**：`resolve` 与 **剪枝**须以 `tabGroups.get` + `windowId` 为准；**禁止**依赖「`tabs.query({ groupId })` 立刻非空」判断组是否存在（并入瞬间会短暂空，误剪 session / 误滤列表 → 误判无组 → 再 `createProperties`）。另合并 `tabGroups.query({ color: 'blue' })` 捕获标题尚未写回、仅颜色已更新的组。专用窗内工作 Tab 均为本组蓝色，误伤概率可接受。
+ * **分组列表**：`tabGroups.query` 在 MV3 Service Worker 中可能恒为 `[]`；须与 **`tabs.query` → `groupId` → `tabGroups.get`** 并集（`mergeTabGroupsWithTabsQueryEnumerate`）。`resolve` 与剪枝仍以 `tabGroups.get` + `windowId` 为准。
  * **查/建/取 id 的一体化**：见 `runPicpuckWorkspaceGroupEnsureAtomicSequence`（仅能在锁内跑）；对外只调 `ensureTabInPicpuckWorkspaceGroup`。平台无同步 API，故为 async「单事务」而非字面同步。
  */
 import { chromeWindowIdStillExists } from './chromeWindowExists.js';
@@ -46,6 +46,82 @@ function isPicpuckAgentWorkspaceGroup(g, sessionGid) {
 
 function isPicpuckWorkspaceGroupCandidate(g, sessionGid) {
   return isPicpuckAgentWorkspaceGroup(g, sessionGid) || isUntitledBlueWorkspaceLikelyOurs(g);
+}
+
+function tabGroupIdNoneValue() {
+  return typeof chrome.tabGroups?.TAB_GROUP_ID_NONE === 'number' ? chrome.tabGroups.TAB_GROUP_ID_NONE : -1;
+}
+
+/**
+ * 用全量 `tabs.query` 上非 NONE 的 `groupId` 再 `tabGroups.get`，得到 SW 里 `tabGroups.query` 漏掉的真实组列表。
+ * @returns {Promise<chrome.tabGroups.TabGroup[]>}
+ */
+async function collectTabGroupsEnumerateViaTabsQuery() {
+  const none = tabGroupIdNoneValue();
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({});
+  } catch {
+    return [];
+  }
+  const gids = new Set();
+  for (const t of tabs) {
+    const gid = t.groupId;
+    if (gid == null || typeof gid !== 'number' || !Number.isFinite(gid) || gid === none) continue;
+    gids.add(gid);
+  }
+  /** @type {chrome.tabGroups.TabGroup[]} */
+  const out = [];
+  for (const gid of gids) {
+    try {
+      out.push(await chrome.tabGroups.get(gid));
+    } catch {
+      /* ignore */
+    }
+  }
+  return out;
+}
+
+/**
+ * @param {chrome.tabGroups.TabGroup[]} fromQuery `tabGroups.query` 结果（可能为空）
+ * @returns {Promise<chrome.tabGroups.TabGroup[]>} 按 group id 去重合并后
+ */
+async function mergeTabGroupsWithTabsQueryEnumerate(fromQuery) {
+  const byId = new Map(fromQuery.map((g) => [g.id, g]));
+  const viaTabs = await collectTabGroupsEnumerateViaTabsQuery();
+  for (const g of viaTabs) {
+    if (!byId.has(g.id)) byId.set(g.id, g);
+  }
+  return [...byId.values()];
+}
+
+/**
+ * 同窗：`tabGroups.query({ windowId })` 可能为空，用该窗 `tabs.query` 的 `groupId` 补全。
+ * @param {number} windowId
+ * @param {chrome.tabGroups.TabGroup[]} fromQueryGroups
+ * @returns {Promise<chrome.tabGroups.TabGroup[]>}
+ */
+async function mergeTabGroupsInWindowWithTabsEnumerate(windowId, fromQueryGroups) {
+  const byId = new Map(fromQueryGroups.map((g) => [g.id, g]));
+  const none = tabGroupIdNoneValue();
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ windowId });
+  } catch {
+    return [...byId.values()];
+  }
+  for (const t of tabs) {
+    const gid = t.groupId;
+    if (gid == null || typeof gid !== 'number' || gid === none) continue;
+    if (byId.has(gid)) continue;
+    try {
+      const g = await chrome.tabGroups.get(gid);
+      if (g.windowId === windowId) byId.set(g.id, g);
+    } catch {
+      /* ignore */
+    }
+  }
+  return [...byId.values()];
 }
 
 /** @type {Map<number, Promise<void>>} */
@@ -207,13 +283,13 @@ async function workspaceWindowHasRegisteredSiteTab(windowId) {
  */
 export async function findExistingWorkspaceWindowIdByGlobalTabGroupScan() {
   const map = await loadGroupMap();
-  let all = [];
+  let fromQuery = [];
   try {
-    all = await chrome.tabGroups.query({});
+    fromQuery = await chrome.tabGroups.query({});
   } catch {
-    all = [];
+    fromQuery = [];
   }
-  if (all.length === 0) {
+  if (fromQuery.length === 0) {
     try {
       const wins = await chrome.windows.getAll({ populate: false });
       for (const w of wins) {
@@ -224,12 +300,14 @@ export async function findExistingWorkspaceWindowIdByGlobalTabGroupScan() {
         } catch {
           continue;
         }
-        all.push(...sub);
+        fromQuery.push(...sub);
       }
     } catch {
       /* ignore */
     }
   }
+  const tabGroupsQueryLen = fromQuery.length;
+  const all = await mergeTabGroupsWithTabsQueryEnumerate(fromQuery);
 
   /** @type {Map<number, number>} windowId → 最优优先级（越小越可信） */
   const best = new Map();
@@ -274,10 +352,16 @@ export async function findExistingWorkspaceWindowIdByGlobalTabGroupScan() {
       windowId: wid,
       matchPriority: prio,
       hint: prio === 0 ? 'title' : prio === 1 ? 'session_gid' : 'untitled_blue+site_tab',
+      tabGroupsQueryLen,
+      mergedGroupCount: all.length,
     });
     return wid;
   }
-  console.info('[PicPuck SW] create 前全局标签组扫描未命中可复用窗', { scannedGroups: all.length });
+  console.info('[PicPuck SW] create 前全局标签组扫描未命中可复用窗', {
+    tabGroupsQueryLen,
+    mergedGroupCount: all.length,
+    note: tabGroupsQueryLen === 0 && all.length > 0 ? 'tabGroups.query 空但 tabs.groupId 枚举有组（SW 已知问题）' : undefined,
+  });
   return null;
 }
 
@@ -397,8 +481,9 @@ async function queryTabGroupsForWindowRobust(windowId) {
  */
 async function collectTabGroupDescriptorsForWindow(windowId) {
   const { groups: fromWindow } = await queryTabGroupsForWindowRobust(windowId);
+  const mergedWindow = await mergeTabGroupsInWindowWithTabsEnumerate(windowId, fromWindow);
   /** @type {Map<number, chrome.tabGroups.TabGroup>} */
-  const byId = new Map(fromWindow.map((g) => [g.id, g]));
+  const byId = new Map(mergedWindow.map((g) => [g.id, g]));
   try {
     const blue = await chrome.tabGroups.query({ windowId, color: 'blue' });
     for (const g of blue) {
