@@ -21,32 +21,6 @@ async function windowStillOpen(windowId) {
 }
 
 /**
- * 通过全量 tabs 上的 groupId + tabGroups.get，列出当前能看到的分组（含 windowId），用于和 query 结果对照。
- * @returns {Promise<Array<{ id: number, title: string, windowId: number }>>}
- */
-async function listTabGroupsViaTabsEnumerate() {
-  const tabs = await chrome.tabs.query({});
-  const groupIds = new Set();
-  for (const t of tabs) {
-    const gid = t.groupId;
-    if (typeof gid === 'number' && gid >= 0) {
-      groupIds.add(gid);
-    }
-  }
-  /** @type {Array<{ id: number, title: string, windowId: number }>} */
-  const out = [];
-  for (const gid of groupIds) {
-    try {
-      const g = await chrome.tabGroups.get(gid);
-      out.push({ id: g.id, title: String(g.title ?? ''), windowId: g.windowId });
-    } catch {
-      /* 组已消失 */
-    }
-  }
-  return out;
-}
-
-/**
  * @returns {Promise<number>}
  */
 async function createWorkspaceWindowAndStoreId() {
@@ -58,21 +32,12 @@ async function createWorkspaceWindowAndStoreId() {
       windowId: g.windowId,
     }));
     console.log('[PicPuck] windows.create 前 tabGroups.query({})', {
+      note: '专用窗关闭后或浏览器刚打开时，分组/窗口常处于未激活态：query 往往为空；此时扩展侧也拿不到对应 Tab，无法用 tab.groupId 反查分组。要复用只能另做持久化等方案，不能指望本步枚举。',
       count: queryRows.length,
       groups: queryRows,
     });
   } catch (e) {
     console.log('[PicPuck] windows.create 前 tabGroups.query({}) 失败', e);
-  }
-
-  try {
-    const viaTabs = await listTabGroupsViaTabsEnumerate();
-    console.log('[PicPuck] windows.create 前 tabs 枚举 + tabGroups.get', {
-      count: viaTabs.length,
-      groups: viaTabs,
-    });
-  } catch (e) {
-    console.log('[PicPuck] windows.create 前 tabs 枚举分组 失败', e);
   }
 
   const w = await chrome.windows.create({
