@@ -27,6 +27,8 @@
       "matches": [
         "https://jimeng.jianying.com/*",
         "https://gemini.google.com/*",
+        "https://picpuck.com/*",
+        "https://www.picpuck.com/*",
         "http://localhost/*",
         "http://127.0.0.1/*"
       ],
@@ -38,6 +40,8 @@
   "host_permissions": [
     "https://jimeng.jianying.com/*",
     "https://gemini.google.com/*",
+    "https://picpuck.com/*",
+    "https://www.picpuck.com/*",
     "http://localhost/*",
     "http://127.0.0.1/*"
   ],
@@ -52,6 +56,8 @@
       "matches": [
         "https://jimeng.jianying.com/*",
         "https://gemini.google.com/*",
+        "https://picpuck.com/*",
+        "https://www.picpuck.com/*",
         "http://localhost/*",
         "http://127.0.0.1/*"
       ]

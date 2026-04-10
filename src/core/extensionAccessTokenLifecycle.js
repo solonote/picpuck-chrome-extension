@@ -36,6 +36,7 @@ export function isMcupFurnaceUrl(url) {
     const h = u.hostname.toLowerCase();
     if (h === 'localhost' || h === '127.0.0.1') return true;
     if (h === '::1') return true;
+    if (h === 'picpuck.com' || h === 'www.picpuck.com') return true;
     return false;
   } catch {
     return false;

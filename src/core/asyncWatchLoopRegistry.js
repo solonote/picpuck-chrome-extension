@@ -8,6 +8,7 @@
 import { startRecoverPageWatcherFromLaunch } from './recoverPageWatcherLaunch.js';
 import { resolveProfileByCoreEngine } from './asyncEngineProfiles.js';
 import { clearAsyncJobWorkTab } from './taskBindings.js';
+import { isMcupFurnaceUrl } from './extensionAccessTokenLifecycle.js';
 
 /**
  * @type {((callerTabId: number, payload: Record<string, unknown>) => Promise<{ ok?: boolean, tabId?: number }>) | null}
@@ -235,7 +236,7 @@ async function resolveCallerTabIdForRelay(callerTabId) {
   const all = await chrome.tabs.query({});
   const forge = all.find((t) => {
     const u = t.url || '';
-    return (u.startsWith('http://localhost') || u.startsWith('http://127.0.0.1')) && t.id != null;
+    return isMcupFurnaceUrl(u) && t.id != null;
   });
   return forge && typeof forge.id === 'number' ? forge.id : undefined;
 }
