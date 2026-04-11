@@ -672,7 +672,22 @@
     var stepKey = 'step10_jimeng_video_ensure_model';
     var wantModel = payload && payload.jimengVideoModel && String(payload.jimengVideoModel).trim() ? String(payload.jimengVideoModel).trim() : 'Seedance 2.0 VIP';
     
-    var modelSelectContainer = doc.querySelector('div.toolbar-select-rZZr1T, div[class*="toolbar-select-"]');
+    // There are multiple select boxes (mode, model). Model is usually the second one or has specific class.
+    var modelSelectContainer = null;
+    var selects = doc.querySelectorAll('div[class*="lv-select-single"]');
+    for (var k = 0; k < selects.length; k++) {
+      var inner = selects[k].querySelector('.lv-select-view-value');
+      var innerText = inner ? (inner.textContent || '').trim() : '';
+      if (innerText && innerText !== '视频生成' && innerText !== '图片生成') {
+        modelSelectContainer = selects[k];
+        break;
+      }
+    }
+    // Fallback if not found by excluding mode
+    if (!modelSelectContainer) {
+      modelSelectContainer = doc.querySelector('div.toolbar-select-rZZr1T') || doc.querySelector('div[class*="toolbar-select-"]');
+    }
+    
     var valEl = modelSelectContainer ? modelSelectContainer.querySelector('.lv-select-view-value') : null;
     var curText = valEl ? (valEl.textContent || '').trim() : '';
     
