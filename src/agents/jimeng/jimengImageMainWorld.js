@@ -770,7 +770,7 @@
     var wantRatio = payload && payload.jimengVideoRatio && String(payload.jimengVideoRatio).trim() ? String(payload.jimengVideoRatio).trim() : '16:9';
     
     // Check if the current button already shows the desired ratio
-    var ratioBtns = doc.querySelectorAll('button.toolbar-button-mCaZcW');
+    var ratioBtns = doc.querySelectorAll('button.toolbar-button-mCaZcW, button[class*="toolbar-button-"]');
     var ratioBtn = null;
     for (var k = 0; k < ratioBtns.length; k++) {
       var txt = (ratioBtns[k].innerText || '').trim();
