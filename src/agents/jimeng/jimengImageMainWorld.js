@@ -600,6 +600,219 @@
     return { ok: true };
   }
 
+  /** @param {{ roundId: string }} payload */
+  async function runStep09VideoEnsureModeVideoGeneration(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step09_jimeng_video_ensure_mode_video_generation';
+    var step34Max = 3;
+    var modeRetries = 0;
+    while (true) {
+      var mode = getCurrentMode();
+      if (mode.indexOf('视频生成') !== -1) {
+        return { ok: true };
+      }
+      var typeClicked = clickWhenVisible(findTypeSelect);
+      appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.clickTypeSelect=' + typeClicked);
+      await delay(DELAY_OPEN);
+      var optionClicked = clickOptionWhenVisible('视频生成');
+      appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.clickOption视频生成=' + optionClicked);
+      await delay(DELAY_AFTER_OPTION);
+      var modeNow = getCurrentMode();
+      var typeOk = modeNow.indexOf('视频生成') !== -1;
+      if (typeOk) {
+        return { ok: true };
+      }
+      modeRetries++;
+      if (modeRetries >= step34Max) {
+        appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.modeRetryExceeded=' + modeRetries);
+        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED' };
+      }
+      await delay(600);
+    }
+  }
+
+  /** @param {{ roundId: string }} payload */
+  async function runStep09bVideoEnsureReferenceMode(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step09b_jimeng_video_ensure_reference_mode';
+    var retries = 0;
+    while (true) {
+      var modeSelectContainer = doc.querySelector('.feature-select-LagwpK div[role="combobox"]');
+      if (!modeSelectContainer) {
+        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到参考模式下拉框' };
+      }
+      var valEl = modeSelectContainer.querySelector('.lv-select-view-value');
+      var currentMode = valEl ? (valEl.innerText || '').trim() : '';
+      if (currentMode.indexOf('全能参考') !== -1) {
+        return { ok: true };
+      }
+      var clicked = clickWhenVisible(function () { return modeSelectContainer; });
+      appendMainLog(roundId, stepKey, 'debug', 'Step09bv.debug.clickRefModeSelect=' + clicked);
+      await delay(DELAY_OPEN);
+      var optionClicked = clickOptionWhenVisible('全能参考');
+      appendMainLog(roundId, stepKey, 'debug', 'Step09bv.debug.clickOption全能参考=' + optionClicked);
+      await delay(DELAY_AFTER_OPTION);
+      
+      var valElNew = doc.querySelector('.feature-select-LagwpK div[role="combobox"] .lv-select-view-value');
+      var modeNow = valElNew ? (valElNew.innerText || '').trim() : '';
+      if (modeNow.indexOf('全能参考') !== -1) {
+        return { ok: true };
+      }
+      retries++;
+      if (retries >= 3) {
+        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED' };
+      }
+      await delay(600);
+    }
+  }
+
+  /** @param {{ roundId: string, jimengVideoModel?: string }} payload */
+  async function runStep10VideoEnsureModel(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step10_jimeng_video_ensure_model';
+    var wantModel = payload && payload.jimengVideoModel && String(payload.jimengVideoModel).trim() ? String(payload.jimengVideoModel).trim() : 'Seedance 2.0 VIP';
+    
+    var cur = getCurrentModel(wantModel); // reuse getCurrentModel
+    if (cur.indexOf(wantModel) !== -1) {
+      return { ok: true };
+    }
+    
+    var modelSelectContainer = doc.querySelector('div.toolbar-select-rZZr1T');
+    var modelClicked = clickWhenVisible(function () { return modelSelectContainer; });
+    appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.openModelSelect=' + modelClicked);
+    if (!modelClicked) {
+      return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED' };
+    }
+    await delay(DELAY_OPEN);
+    
+    var popups = doc.querySelectorAll('.lv-select-popup');
+    var targetPopup = popups[popups.length - 1];
+    var options = targetPopup ? targetPopup.querySelectorAll('li[role="option"]') : [];
+    var matchedOpt = null;
+    for (var i = 0; i < options.length; i++) {
+      var optText = (options[i].innerText || '').trim();
+      if (optText === wantModel) {
+        matchedOpt = options[i];
+        break;
+      }
+    }
+    if (!matchedOpt) {
+      // fallback: match alt attribute
+      var imgs = targetPopup ? targetPopup.querySelectorAll('img') : [];
+      for (var j = 0; j < imgs.length; j++) {
+        var alt = (imgs[j].getAttribute('alt') || '').trim();
+        if (alt === wantModel) {
+          matchedOpt = imgs[j].closest('li[role="option"]');
+          break;
+        }
+      }
+    }
+    
+    if (matchedOpt) {
+      try {
+        matchedOpt.scrollIntoView({ block: 'nearest' });
+      } catch(e) {}
+      matchedOpt.click();
+      appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.modelMatchedAndClicked=true');
+    } else {
+      appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.modelNotFound=' + wantModel);
+      return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到指定的视频模型' };
+    }
+    await delay(DELAY_AFTER_OPTION);
+    return { ok: true };
+  }
+
+  /** @param {{ roundId: string, jimengVideoRatio?: string }} payload */
+  async function runStep11VideoEnsureRatio(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step11_jimeng_video_ensure_ratio';
+    var wantRatio = payload && payload.jimengVideoRatio && String(payload.jimengVideoRatio).trim() ? String(payload.jimengVideoRatio).trim() : '16:9';
+    
+    // Check if the current button already shows the desired ratio
+    var ratioBtns = doc.querySelectorAll('button.toolbar-button-mCaZcW');
+    var ratioBtn = null;
+    for (var k = 0; k < ratioBtns.length; k++) {
+      var txt = (ratioBtns[k].innerText || '').trim();
+      if (txt.match(/^\d+:\d+$/)) {
+        ratioBtn = ratioBtns[k];
+        if (txt === wantRatio) return { ok: true };
+        break;
+      }
+    }
+    
+    if (!ratioBtn) {
+      return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到画面比例按钮' };
+    }
+    
+    var clicked = clickWhenVisible(function () { return ratioBtn; });
+    if (!clicked) return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED' };
+    await delay(DELAY_OPEN);
+    
+    var radios = doc.querySelectorAll('.lv-popover-content input[type="radio"]');
+    var targetRadio = null;
+    for (var m = 0; m < radios.length; m++) {
+      if (radios[m].value === wantRatio) {
+        targetRadio = radios[m];
+        break;
+      }
+    }
+    
+    if (targetRadio) {
+      var labelEl = targetRadio.closest('label.lv-radio') || targetRadio;
+      labelEl.click();
+      appendMainLog(roundId, stepKey, 'debug', 'Step11v.debug.ratioClicked=' + wantRatio);
+    } else {
+      appendMainLog(roundId, stepKey, 'debug', 'Step11v.debug.ratioNotFound=' + wantRatio);
+      return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到指定的画面比例选项' };
+    }
+    await delay(DELAY_AFTER_OPTION);
+    closePopover();
+    return { ok: true };
+  }
+
+  /** @param {{ roundId: string, jimengVideoDuration?: number }} payload */
+  async function runStep11bVideoEnsureDuration(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step11b_jimeng_video_ensure_duration';
+    if (typeof payload.jimengVideoDuration !== 'number' || isNaN(payload.jimengVideoDuration)) {
+      appendMainLog(roundId, stepKey, 'info', 'Step11bv.info.durationNotProvided_skip');
+      return { ok: true };
+    }
+    
+    var wantSeconds = payload.jimengVideoDuration;
+    if (wantSeconds > 15) wantSeconds = 15;
+    var wantText = wantSeconds + 's';
+    
+    // Find duration combobox: a combobox whose view value ends with 's', typically right next to the ratio button
+    var comboboxes = doc.querySelectorAll('div[role="combobox"]');
+    var durationSelect = null;
+    for (var i = 0; i < comboboxes.length; i++) {
+      var valText = (comboboxes[i].innerText || '').trim();
+      if (valText.match(/^\d+s$/)) {
+        durationSelect = comboboxes[i];
+        if (valText === wantText) return { ok: true }; // already set
+        break;
+      }
+    }
+    
+    if (!durationSelect) {
+      return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到生成时长下拉框' };
+    }
+    
+    var clicked = clickWhenVisible(function () { return durationSelect; });
+    if (!clicked) return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED' };
+    await delay(DELAY_OPEN);
+    
+    var optionClicked = clickOptionWhenVisible(wantText);
+    if (!optionClicked) {
+      appendMainLog(roundId, stepKey, 'debug', 'Step11bv.debug.durationNotFound=' + wantText);
+      return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到指定的时长选项' };
+    }
+    appendMainLog(roundId, stepKey, 'debug', 'Step11bv.debug.durationClicked=' + wantText);
+    await delay(DELAY_AFTER_OPTION);
+    return { ok: true };
+  }
+
   /** @param {{ roundId: string, ratioLabel?: string, resolutionLabel?: string }} payload */
   async function runStep11EnsureRatioResolution(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
@@ -3109,6 +3322,11 @@
     runStep08CloseOpenPopovers: runStep08CloseOpenPopovers,
     runStep09EnsureModeImageGeneration: runStep09EnsureModeImageGeneration,
     runStep10EnsureModel: runStep10EnsureModel,
+    runStep09VideoEnsureModeVideoGeneration: runStep09VideoEnsureModeVideoGeneration,
+    runStep09bVideoEnsureReferenceMode: runStep09bVideoEnsureReferenceMode,
+    runStep10VideoEnsureModel: runStep10VideoEnsureModel,
+    runStep11VideoEnsureRatio: runStep11VideoEnsureRatio,
+    runStep11bVideoEnsureDuration: runStep11bVideoEnsureDuration,
     runStep11EnsureRatioResolution: runStep11EnsureRatioResolution,
     runStep12ClearForm: runStep12ClearForm,
     runStep13PasteReferenceClearPrompt: runStep13PasteReferenceClearPrompt,

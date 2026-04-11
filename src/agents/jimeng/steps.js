@@ -426,6 +426,32 @@ export async function step09_jimeng_ensure_mode_image_generation(ctx) {
   });
 }
 
+/** 视频模式：类型选择器切「视频生成」 */
+export async function step09_jimeng_video_ensure_mode_video_generation(ctx) {
+  await execJimengMainRunner(ctx, {
+    nn: 9,
+    stepKey: 'step09_jimeng_video_ensure_mode_video_generation',
+    runnerName: 'runStep09VideoEnsureModeVideoGeneration',
+    mainPayload: {},
+    failUserMsg: '动作失败+无法切换到视频生成模式',
+    startMsg: '将生成类型切换为「视频生成」',
+    doneMsg: '已处于视频生成模式',
+  });
+}
+
+/** 视频模式：参考模式切「全能参考」 */
+export async function step09b_jimeng_video_ensure_reference_mode(ctx) {
+  await execJimengMainRunner(ctx, {
+    nn: 9,
+    stepKey: 'step09b_jimeng_video_ensure_reference_mode',
+    runnerName: 'runStep09bVideoEnsureReferenceMode',
+    mainPayload: {},
+    failUserMsg: '动作失败+无法切换至全能参考模式',
+    startMsg: '将参考模式切换为「全能参考」',
+    doneMsg: '参考模式已切换',
+  });
+}
+
 /** 设计 §4.1.2：模型 lv-select（§5 modelLabel 可空） */
 export async function step10_jimeng_ensure_model(ctx) {
   const { payload } = ctx;
@@ -439,6 +465,22 @@ export async function step10_jimeng_ensure_model(ctx) {
     failUserMsg: '动作失败+无法选择即梦模型',
     startMsg: '在模型下拉中选择请求指定的模型',
     doneMsg: '模型已选择',
+  });
+}
+
+/** 视频模式：选择指定模型 */
+export async function step10_jimeng_video_ensure_model(ctx) {
+  const { payload } = ctx;
+  await execJimengMainRunner(ctx, {
+    nn: 10,
+    stepKey: 'step10_jimeng_video_ensure_model',
+    runnerName: 'runStep10VideoEnsureModel',
+    mainPayload: {
+      jimengVideoModel: payloadString(payload, 'jimengVideoModel'),
+    },
+    failUserMsg: '动作失败+无法选择即梦视频模型',
+    startMsg: '选择请求指定的视频模型',
+    doneMsg: '视频模型已选择',
   });
 }
 
@@ -456,6 +498,38 @@ export async function step11_jimeng_ensure_ratio_resolution(ctx) {
     failUserMsg: '动作失败+无法设置画幅或分辨率',
     startMsg: '设置画幅比例与分辨率',
     doneMsg: '画幅与分辨率已设置',
+  });
+}
+
+/** 视频模式：设定画面比例 */
+export async function step11_jimeng_video_ensure_ratio(ctx) {
+  const { payload } = ctx;
+  await execJimengMainRunner(ctx, {
+    nn: 11,
+    stepKey: 'step11_jimeng_video_ensure_ratio',
+    runnerName: 'runStep11VideoEnsureRatio',
+    mainPayload: {
+      jimengVideoRatio: payloadString(payload, 'jimengVideoRatio'),
+    },
+    failUserMsg: '动作失败+无法设置画面比例',
+    startMsg: '设置画面比例',
+    doneMsg: '画面比例已设置',
+  });
+}
+
+/** 视频模式：设定生成时长 */
+export async function step11b_jimeng_video_ensure_duration(ctx) {
+  const { payload } = ctx;
+  await execJimengMainRunner(ctx, {
+    nn: 11,
+    stepKey: 'step11b_jimeng_video_ensure_duration',
+    runnerName: 'runStep11bVideoEnsureDuration',
+    mainPayload: {
+      jimengVideoDuration: payload && typeof payload.jimengVideoDuration === 'number' ? payload.jimengVideoDuration : undefined,
+    },
+    failUserMsg: '动作失败+无法设置生成时长',
+    startMsg: '设置视频生成时长',
+    doneMsg: '生成时长已设置',
   });
 }
 
