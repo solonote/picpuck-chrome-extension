@@ -1063,6 +1063,13 @@
     for (ii = 0; ii < items.length; ii++) {
       item = items[ii];
       if (!jimengReferenceItemHasPreviewImage(item)) continue;
+      
+      // Look for the specific SVG container in the audio item
+      var audioRemoveBtn = item.querySelector('.remove-button-I6lF9g');
+      if (audioRemoveBtn) {
+          return audioRemoveBtn;
+      }
+      
       nodes = item.querySelectorAll('[class*="remove-button"]');
       best = null;
       bestR = -1;
