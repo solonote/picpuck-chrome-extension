@@ -1016,10 +1016,9 @@
   function jimengReferenceItemHasPreviewImage(item) {
     if (!item || !item.querySelectorAll) return false;
     
-    // Check for audio specific reference item first
-    if (item.querySelector && item.querySelector('.label-UvsqUB, .reference-attachment-Odef10')) {
-        var text = item.textContent || '';
-        if (text.indexOf('音频') !== -1 || text.indexOf('音色') !== -1) return true;
+    // 如果有删除按钮容器，说明一定是已经上传的参考内容（图片或音频）
+    if (item.querySelector('[class*="remove-button"]')) {
+      return true;
     }
     
     if (!item.querySelector('img')) return false;
@@ -1063,12 +1062,6 @@
     for (ii = 0; ii < items.length; ii++) {
       item = items[ii];
       if (!jimengReferenceItemHasPreviewImage(item)) continue;
-      
-      // Look for the specific SVG container in the audio item
-      var audioRemoveBtn = item.querySelector('.remove-button-I6lF9g');
-      if (audioRemoveBtn) {
-          return audioRemoveBtn;
-      }
       
       nodes = item.querySelectorAll('[class*="remove-button"]');
       best = null;
