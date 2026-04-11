@@ -1444,72 +1444,54 @@
   async function runStep15bVideoExpandAudioMentions(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step15b_jimeng_video_expand_audio_mentions';
-    var pText = typeof payload.prompt === 'string' ? payload.prompt : '';
-    var match;
-    var audioIndices = [];
-    var re = /\(参考音频(\d+)\)/g;
-    while ((match = re.exec(pText)) !== null) {
-      var n = parseInt(match[1], 10);
-      if (Number.isFinite(n)) audioIndices.push(n);
-    }
-    if (audioIndices.length === 0) {
-      return { ok: true, skipped: true };
-    }
     var target = findJimengPromptField();
     if (!target) {
       return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
     }
-    var maxRounds = STEP15_MAX_PLACEHOLDER_ROUNDS;
+    var isTa = target.tagName === 'TEXTAREA';
+    if (isTa) {
+      appendMainLog(roundId, stepKey, 'debug', 'Step15b.debug.textareaSkipAt');
+      return { ok: true };
+    }
     var round = 0;
-    while (round < maxRounds) {
+    while (round < STEP15_MAX_PLACEHOLDER_ROUNDS) {
       round++;
-      var foundAny = false;
-      for (var k = 0; k < audioIndices.length; k++) {
-        var aNum = audioIndices[k];
-        var ph = '(参考音频' + aNum + ')';
-        if (selectTextInElement(target, ph)) {
-          foundAny = true;
-          try {
-            var r = window.getSelection().getRangeAt(0);
-            var mNode = document.createTextNode('@');
-            r.insertNode(mNode);
-            r.setStartAfter(mNode);
-            r.setEndAfter(mNode);
-            var sel = window.getSelection();
-            sel.removeAllRanges();
-            sel.addRange(r);
-            // also we need to delete the placeholder text. Wait, we should replace the text.
-            r.setStartBefore(mNode.previousSibling); // wait, it's easier to just replace
-            // let's do deleteContents
-          } catch (ed) {
-            appendMainLog(roundId, stepKey, 'debug', 'Step15b.debug.deleteContentsErr ' + (ed && ed.message));
-          }
-          try {
-            target.dispatchEvent(new Event('input', { bubbles: true }));
-          } catch (eIn) {
-            /* ignore */
-          }
-          await delay(AFTER_OPTION_MS_AT);
-          var waitRes = await waitForJimengAtSelectPopupReady(roundId, stepKey, target);
-          if (!waitRes.ok) {
-            return waitRes;
-          }
-          var clickOk = await clickJimengReferenceAudioOption(aNum, waitRes.popup);
-          if (!clickOk) {
-            appendMainLog(roundId, stepKey, 'info', 'Step15b.动作失败+下拉列表中未找到对应的参考音频项');
-            return { ok: false, code: 'JIMENG_AUDIO_OPTION_NOT_FOUND' };
-          }
-          await delay(AFTER_OPTION_MS_AT);
-          break; // break for-loop to re-evaluate remaining placeholders
-        }
+      var inner = target.innerText || target.textContent || '';
+      var m = inner.match(/\(参考音频(\d+)\)/);
+      if (!m) {
+        return { ok: true };
       }
-      if (!foundAny) break;
+      var token = m[0];
+      var n = parseInt(m[1], 10);
+      if (!selectTextInElement(target, token)) {
+        appendMainLog(roundId, stepKey, 'info', 'Step15b.动作失败+无法选中音频占位符');
+        return { ok: false, code: 'JIMENG_AT_PLACEHOLDER_SELECT_FAILED' };
+      }
+      var insAt = false;
+      try {
+        insAt = doc.execCommand('insertText', false, '@');
+      } catch (eAt) {
+        /* ignore */
+      }
+      if (!insAt) {
+        appendMainLog(roundId, stepKey, 'info', 'Step15b.动作失败+无法插入@');
+        return { ok: false, code: 'JIMENG_AT_INSERT_FAILED' };
+      }
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+      var wPop = await waitForJimengAtSelectPopupReady(roundId, stepKey, target);
+      if (!wPop.ok) {
+        return { ok: false, code: wPop.code };
+      }
+      var clicked = await clickJimengReferenceAudioOption(n, wPop.popup);
+      appendMainLog(roundId, stepKey, 'debug', 'Step15b.debug.refOption n=' + n + ' ok=' + clicked);
+      if (!clicked) {
+        appendMainLog(roundId, stepKey, 'info', 'Step15b.动作失败+下拉已加载但无对应音频项' + n);
+        return { ok: false, code: 'JIMENG_AT_OPTION_NOT_FOUND' };
+      }
+      await delay(AFTER_OPTION_MS_AT);
     }
-    if (round >= maxRounds) {
-      appendMainLog(roundId, stepKey, 'info', 'Step15b.动作失败+替换音频占位符达到循环上限');
-      return { ok: false, code: 'JIMENG_AUDIO_MAX_ROUNDS' };
-    }
-    return { ok: true };
+    appendMainLog(roundId, stepKey, 'info', 'Step15b.动作失败+@ 音频展开超过最大轮次');
+    return { ok: false, code: 'JIMENG_AT_EXPAND_EXHAUSTED' };
   }
 
   /** @param {{ roundId: string, images?: string[] }} payload */
