@@ -2656,7 +2656,7 @@
   /** 即梦全局 Message 失败态，如 `<span class="lv-message-content">复制失败，请重试</span>` */
   function jimengTextIndicatesCopyFailure(t) {
     if (!t || typeof t !== 'string') return false;
-    return t.indexOf('复制失败') !== -1;
+    return t.indexOf('复制失败') !== -1 || t.indexOf('下载失败') !== -1;
   }
 
   function findVisibleJimengCopyFailureToast() {
@@ -2684,16 +2684,16 @@
     return null;
   }
 
-  function tryDismissJimengFloatingUi() {
-    try {
-      doc.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }),
-      );
-      doc.dispatchEvent(
-        new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }),
-      );
-    } catch (eEsc) {
-      /* ignore */
+  function clearAllJimengToasts() {
+    var nodes = doc.querySelectorAll(
+      '[class*="lv-message-wrapper"], [class*="arco-message"], [class*="semi-toast"], [class*="message-wrapper"], [class*="spin-message"]',
+    );
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i] && nodes[i].parentNode) {
+        try {
+          nodes[i].parentNode.removeChild(nodes[i]);
+        } catch (e) {}
+      }
     }
   }
 
@@ -2954,7 +2954,7 @@
    * @param {string} stepKey
    */
   async function ensureJimengWorkTabVisibleForStep21Collect(roundId, stepKey) {
-    if (!document.hidden && document.visibilityState === 'visible') {
+    if (!document.hidden && document.visibilityState === 'visible' && document.hasFocus()) {
       await delay(STEP21_TAB_VISIBLE_SETTLE_MS);
       appendMainLog(roundId, stepKey, 'info', 'Step21.info.alreadyVisibleSkipActivate');
       return { ok: true };
@@ -2979,12 +2979,17 @@
     );
     var deadline = Date.now() + STEP21_TAB_ACTIVATE_MAX_WAIT_MS;
     while (Date.now() < deadline) {
-      if (!document.hidden && document.visibilityState === 'visible') {
+      if (!document.hidden && document.visibilityState === 'visible' && document.hasFocus()) {
         await delay(STEP21_TAB_VISIBLE_SETTLE_MS);
         appendMainLog(roundId, stepKey, 'info', 'Step21.info.tabVisibleSettled');
         return { ok: true };
       }
       await delay(100);
+    }
+    // Fallback: OS might not give focus back
+    if (!document.hidden && document.visibilityState === 'visible') {
+      appendMainLog(roundId, stepKey, 'info', 'Step21.info.tabVisibleButNotFocusedSettled');
+      return { ok: true };
     }
     appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+等待工作Tab置前超时');
     return { ok: false, code: 'JIMENG_COLLECT_TAB_ACTIVATE_TIMEOUT' };
@@ -3071,9 +3076,9 @@
       var clipReadMs = 20000;
       var copyAttempt = 0;
       var clipRes = null;
-      copyRetry: while (copyAttempt < COPY_RETRY_MAX) {
+        copyRetry: while (copyAttempt < COPY_RETRY_MAX) {
         copyAttempt++;
-        tryDismissJimengFloatingUi();
+        clearAllJimengToasts();
         await delay(220);
         try {
           dispatchSyntheticContextMenu(card, cx, cy);
@@ -3128,7 +3133,7 @@
               'debug',
               'Step21.debug.copyFailureToastDuringProgress a=' + copyAttempt,
             );
-            tryDismissJimengFloatingUi();
+            clearAllJimengToasts();
             await delay(450);
             if (copyAttempt >= COPY_RETRY_MAX) {
               appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制失败提示且重试耗尽');
@@ -3167,7 +3172,7 @@
               'debug',
               'Step21.debug.copyFailureToastBeforeSuccess a=' + copyAttempt,
             );
-            tryDismissJimengFloatingUi();
+            clearAllJimengToasts();
             await delay(450);
             if (copyAttempt >= COPY_RETRY_MAX) {
               appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制失败提示且重试耗尽');
@@ -3202,7 +3207,7 @@
               'debug',
               'Step21.debug.copyFailureToastAfterClipboardMiss a=' + copyAttempt,
             );
-            tryDismissJimengFloatingUi();
+            clearAllJimengToasts();
             await delay(450);
             if (copyAttempt >= COPY_RETRY_MAX) {
               appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制失败提示且重试耗尽');
