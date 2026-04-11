@@ -51,6 +51,28 @@ const PROFILES = [
     },
   },
   {
+    enginePrefix: 'jimeng_seedance',
+    launchCommand: 'JIMENG_VIDEO_FILL',
+    recoverStrategy: 'PROBE_RELAY',
+    probeCommand: null,
+    relayCommand: null,
+    recoverCommand: null,
+    awaitingRelayPhase: null,
+    parseProbeOutcome: null,
+    registerWatchLoopOnLaunchSuccess: false,
+    startRecoverPageWatcherOnLaunchSuccess: false,
+    injectRecoverPageWatcherAfterProbe: false,
+    keepWatchLoopAfterRelaySuccess: false,
+    defaultSubmitModeForLaunch: 'none',
+    hasLaunchAnchor(ctx) {
+      return false;
+    },
+    mergeLaunchRecoverPayload(ctx, recoverPayload) {},
+    readProbeOutcome(ctx) {
+      return '';
+    },
+  },
+  {
     enginePrefix: 'gemini_agent',
     launchCommand: 'GEMINI_ASYNC_LAUNCH',
     recoverStrategy: 'PROBE_RELAY',

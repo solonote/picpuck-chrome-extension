@@ -15,7 +15,7 @@ export function isJimengAiToolHomeUrl(url) {
     const u = new URL(url);
     if (u.hostname !== 'jimeng.jianying.com') return false;
     const p = u.pathname.replace(/\/+$/, '') || '/';
-    return p === '/ai-tool/generate';
+    return p === '/ai-tool/generate' || p === '/ai-tool/video/generate' || p === '/ai-tool/image/generate';
   } catch {
     return false;
   }
