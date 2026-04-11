@@ -1011,6 +1011,7 @@
           roundId: res && res.roundId,
           tabId: res && res.tabId,
           phase: res && res.phase,
+          version: res && res.version,
         };
         window.postMessage(reply, window.location.origin);
       });

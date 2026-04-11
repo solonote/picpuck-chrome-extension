@@ -113,7 +113,9 @@ export function installRuntimeMessageHandlers() {
       }
       /** PicPuck 页同源 postMessage 经 content 转发时带原始 type，便于对照 */
       if (payload.type === PAGE_CMD_TYPE && payload.action === 'ping') {
-        sendResponse({ ok: true });
+        let ver = '';
+        try { ver = chrome.runtime.getManifest().version; } catch (e) {}
+        sendResponse({ ok: true, version: ver });
         return;
       }
       if (payload.type === PAGE_CMD_TYPE && payload.action === 'picpuckAsyncGeneration') {
