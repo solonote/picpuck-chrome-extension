@@ -1011,9 +1011,17 @@
    * 参考项内是否已有实际上传的预览图。
    * 空槽示例：`reference-item` 内仅有 `reference-upload` + 加号 SVG + file input，无 `<img>`，`--reference-count: 1` 亦可。
    * 有图：`img[data-apm-action="content-generator-reference-image"]`，或带 blob/https 且足够大的预览 img。
+   * 视频音频：可能没有 img 只有 class 含 audio 或者是音频图示
    */
   function jimengReferenceItemHasPreviewImage(item) {
     if (!item || !item.querySelectorAll) return false;
+    
+    // Check for audio specific reference item first
+    if (item.querySelector && item.querySelector('.label-UvsqUB, .reference-attachment-Odef10')) {
+        var text = item.textContent || '';
+        if (text.indexOf('音频') !== -1 || text.indexOf('音色') !== -1) return true;
+    }
+    
     if (!item.querySelector('img')) return false;
     if (item.querySelector && item.querySelector('img[data-apm-action="content-generator-reference-image"]')) return true;
     var imgs = item.querySelectorAll('img');
@@ -1423,8 +1431,8 @@
     var options = popup ? popup.querySelectorAll('li[role="option"]') : [];
     for (var oi = 0; oi < options.length; oi++) {
       var li = options[oi];
-      var mm = (li.textContent || '').match(/音频(\d+)/);
-      if (mm && parseInt(mm[1], 10) === audioNum) {
+      var mm = (li.textContent || '').match(/(音色|音频)(\d+)/);
+      if (mm && parseInt(mm[2], 10) === audioNum) {
         await delay(100);
         li.click();
         return true;
@@ -1457,9 +1465,12 @@
     while (round < STEP15_MAX_PLACEHOLDER_ROUNDS) {
       round++;
       var inner = target.innerText || target.textContent || '';
-      var m = inner.match(/\(参考音频(\d+)\)/);
+      var m = inner.match(/\(参考音色<占位符>(\d+)\)/); // update regex if changed in frontend
       if (!m) {
-        return { ok: true };
+          m = inner.match(/\(参考音频(\d+)\)/);
+          if (!m) {
+              return { ok: true };
+          }
       }
       var token = m[0];
       var n = parseInt(m[1], 10);
