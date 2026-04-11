@@ -801,7 +801,13 @@ export async function step21_jimeng_collect_images_via_context_menu(ctx) {
     startMsg: '逐张右键复制图片并读取剪贴板',
     doneMsg: '已收集全部结果图',
   });
-  ctx.jimengCollectedImages = Array.isArray(r.images) ? r.images : [];
+  try {
+    const { jimengImageStore } = await import('./jimengImageStore.js');
+    ctx.jimengCollectedImages = jimengImageStore.get(roundId) || [];
+    jimengImageStore.delete(roundId);
+  } catch (e) {
+    ctx.jimengCollectedImages = [];
+  }
 }
 
 /** Enter 成功收集多图后：仅经扩展 Token 调后端 `generation-async/complete` 落库（不分片 relay 至熔炉页） */
@@ -894,7 +900,9 @@ export async function step04_jimeng_recover_collect(ctx) {
     return;
   }
   ctx.jimengRecoverOutcome = 'ready';
-  ctx.jimengCollectedImages = Array.isArray(r.images) ? r.images : [];
+  const { jimengImageStore } = await import('./jimengImageStore.js');
+  ctx.jimengCollectedImages = jimengImageStore.get(roundId) || [];
+  jimengImageStore.delete(roundId);
 }
 
 /**

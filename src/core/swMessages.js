@@ -105,6 +105,22 @@ export function installRuntimeMessageHandlers() {
       return;
     }
 
+    if (msg.type === 'JIMENG_CHUNKED_IMAGE_RELAY') {
+      const p = msg.payload;
+      if (p && p.roundId && p.imageBase64) {
+        import('../agents/jimeng/jimengImageStore.js').then(({ jimengImageStore }) => {
+          if (!jimengImageStore.has(p.roundId)) {
+            jimengImageStore.set(p.roundId, []);
+          }
+          jimengImageStore.get(p.roundId).push({
+            imageBase64: p.imageBase64,
+            contentType: p.contentType || 'image/png',
+          });
+        }).catch(() => {});
+      }
+      return;
+    }
+
     if (msg.type === PICPUCK_COMMAND) {
       const payload = msg.payload;
       if (!payload || typeof payload !== 'object') {

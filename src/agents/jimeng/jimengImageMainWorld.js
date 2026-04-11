@@ -3037,15 +3037,29 @@
         await delay(500);
       }
       prevB64 = clipRes.imageBase64;
-      collected.push({
-        imageBase64: clipRes.imageBase64,
-        contentType: typeof clipRes.contentType === 'string' && clipRes.contentType ? clipRes.contentType : 'image/png',
-      });
-      await delay(200);
+        collected.push({
+          imageBase64: clipRes.imageBase64,
+          contentType: typeof clipRes.contentType === 'string' && clipRes.contentType ? clipRes.contentType : 'image/png',
+        });
+        try {
+          window.postMessage(
+            {
+              picpuckBridge: true,
+              kind: 'JIMENG_CHUNKED_IMAGE_RELAY',
+              roundId: roundId,
+              imageBase64: clipRes.imageBase64,
+              contentType: typeof clipRes.contentType === 'string' && clipRes.contentType ? clipRes.contentType : 'image/png',
+            },
+            location.origin
+          );
+        } catch (eRelay) {
+          /* ignore */
+        }
+        await delay(200);
+      }
+      appendMainLog(roundId, stepKey, 'info', 'Step21.已从剪贴板收集即梦结果图+张数=' + collected.length);
+      return { ok: true, images: [] }; // images are relayed chunk by chunk to avoid executeScript hang
     }
-    appendMainLog(roundId, stepKey, 'info', 'Step21.已从剪贴板收集即梦结果图+张数=' + collected.length);
-    return { ok: true, images: collected };
-  }
 
   /** RECOVER：在页内轮询直至结果区可观测（结构槽位 / https 槽位 / 完成态文案）或超时，避免 SW 一进来就读空 DOM。 */
   var RECOVER_DOM_READY_TIMEOUT_MS = 45000;

@@ -778,6 +778,10 @@
       safeRuntimeSendMessage({ type: LOG_APPEND, entry: d.entry });
       return;
     }
+    if (d && d.picpuckBridge === true && d.kind === 'JIMENG_CHUNKED_IMAGE_RELAY') {
+      safeRuntimeSendMessage({ type: 'JIMENG_CHUNKED_IMAGE_RELAY', payload: d });
+      return;
+    }
     if (d && d.picpuckBridge === true && d.kind === 'JIMENG_CLIPBOARD_READ_ARM') {
       const requestId = typeof d.requestId === 'string' ? d.requestId : '';
       const prevB64 = typeof d.previousImageBase64 === 'string' ? d.previousImageBase64 : '';
