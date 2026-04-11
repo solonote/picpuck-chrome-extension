@@ -675,6 +675,17 @@
     var modelSelectContainer = doc.querySelector('div.toolbar-select-rZZr1T, div[class*="toolbar-select-"]');
     var valEl = modelSelectContainer ? modelSelectContainer.querySelector('.lv-select-view-value') : null;
     var curText = valEl ? (valEl.textContent || '').trim() : '';
+    
+    // We must parse out exactly the text to avoid "Seedance 2.0 Fast VIP" matching "Seedance 2.0"
+    if (valEl) {
+      var textNodes = [];
+      var child = valEl.firstChild;
+      while (child) {
+        if (child.nodeType === 3) textNodes.push(child.textContent);
+        child = child.nextSibling;
+      }
+      curText = textNodes.join('').trim();
+    }
     if (curText === wantModel) {
       return { ok: true };
     }
@@ -686,24 +697,38 @@
     }
     await delay(DELAY_OPEN);
     
-    var popups = doc.querySelectorAll('.lv-select-popup');
-    var targetPopup = popups[popups.length - 1];
+    var popups = getVisiblePopups();
+    var targetPopup = popups.length ? popups[popups.length - 1] : null;
     var options = targetPopup ? targetPopup.querySelectorAll('li[role="option"]') : [];
     var matchedOpt = null;
-    for (var i = 0; i < options.length; i++) {
-      var optText = (options[i].innerText || '').trim();
-      if (optText === wantModel) {
-        matchedOpt = options[i];
+    
+    // fallback: match alt attribute first as it is the most exact
+    var imgs = targetPopup ? targetPopup.querySelectorAll('img') : [];
+    for (var j = 0; j < imgs.length; j++) {
+      var alt = (imgs[j].getAttribute('alt') || '').trim();
+      if (alt === wantModel) {
+        matchedOpt = imgs[j].closest('li[role="option"]');
         break;
       }
     }
+    
     if (!matchedOpt) {
-      // fallback: match alt attribute
-      var imgs = targetPopup ? targetPopup.querySelectorAll('img') : [];
-      for (var j = 0; j < imgs.length; j++) {
-        var alt = (imgs[j].getAttribute('alt') || '').trim();
-        if (alt === wantModel) {
-          matchedOpt = imgs[j].closest('li[role="option"]');
+      for (var i = 0; i < options.length; i++) {
+        var labelEl = options[i].querySelector('.option-label-Fv9c0E');
+        var optText = '';
+        if (labelEl) {
+          var tNodes = [];
+          var c = labelEl.firstChild;
+          while (c) {
+            if (c.nodeType === 3) tNodes.push(c.textContent);
+            c = c.nextSibling;
+          }
+          optText = tNodes.join('').trim();
+        } else {
+          optText = (options[i].innerText || options[i].textContent || '').trim();
+        }
+        if (optText === wantModel) {
+          matchedOpt = options[i];
           break;
         }
       }
@@ -804,8 +829,8 @@
     if (!clicked) return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED' };
     await delay(DELAY_OPEN);
     
-    var popups = doc.querySelectorAll('.lv-select-popup');
-    var targetPopup = popups[popups.length - 1];
+    var popups = getVisiblePopups();
+    var targetPopup = popups.length ? popups[popups.length - 1] : null;
     var options = targetPopup ? targetPopup.querySelectorAll('li[role="option"]') : [];
     var matchedOpt = null;
     for (var j = 0; j < options.length; j++) {
