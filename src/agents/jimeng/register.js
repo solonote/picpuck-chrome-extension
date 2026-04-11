@@ -74,6 +74,7 @@ registerAgentCommands([
       step12_jimeng_clear_form,
       step13_jimeng_paste_reference_clear_prompt,
       step14_jimeng_fill_prompt_text,
+      step15_jimeng_expand_at_mentions,
     ],
   },
 ]);
