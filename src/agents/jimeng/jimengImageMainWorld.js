@@ -672,12 +672,13 @@
     var stepKey = 'step10_jimeng_video_ensure_model';
     var wantModel = payload && payload.jimengVideoModel && String(payload.jimengVideoModel).trim() ? String(payload.jimengVideoModel).trim() : 'Seedance 2.0 VIP';
     
-    var cur = getCurrentModel(wantModel); // reuse getCurrentModel
-    if (cur.indexOf(wantModel) !== -1) {
+    var modelSelectContainer = doc.querySelector('div.toolbar-select-rZZr1T, div[class*="toolbar-select-"]');
+    var valEl = modelSelectContainer ? modelSelectContainer.querySelector('.lv-select-view-value') : null;
+    var curText = valEl ? (valEl.textContent || '').trim() : '';
+    if (curText === wantModel) {
       return { ok: true };
     }
     
-    var modelSelectContainer = doc.querySelector('div.toolbar-select-rZZr1T');
     var modelClicked = clickWhenVisible(function () { return modelSelectContainer; });
     appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.openModelSelect=' + modelClicked);
     if (!modelClicked) {
@@ -803,12 +804,28 @@
     if (!clicked) return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED' };
     await delay(DELAY_OPEN);
     
-    var optionClicked = clickOptionWhenVisible(wantText);
-    if (!optionClicked) {
+    var popups = doc.querySelectorAll('.lv-select-popup');
+    var targetPopup = popups[popups.length - 1];
+    var options = targetPopup ? targetPopup.querySelectorAll('li[role="option"]') : [];
+    var matchedOpt = null;
+    for (var j = 0; j < options.length; j++) {
+      var optText = (options[j].innerText || options[j].textContent || '').trim();
+      if (optText === wantText) {
+        matchedOpt = options[j];
+        break;
+      }
+    }
+    
+    if (matchedOpt) {
+      try {
+        matchedOpt.scrollIntoView({ block: 'nearest' });
+      } catch(e) {}
+      matchedOpt.click();
+      appendMainLog(roundId, stepKey, 'debug', 'Step11bv.debug.durationClicked=' + wantText);
+    } else {
       appendMainLog(roundId, stepKey, 'debug', 'Step11bv.debug.durationNotFound=' + wantText);
       return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到指定的时长选项' };
     }
-    appendMainLog(roundId, stepKey, 'debug', 'Step11bv.debug.durationClicked=' + wantText);
     await delay(DELAY_AFTER_OPTION);
     return { ok: true };
   }
