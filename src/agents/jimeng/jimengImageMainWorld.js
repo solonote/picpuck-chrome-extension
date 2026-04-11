@@ -672,25 +672,26 @@
     var stepKey = 'step10_jimeng_video_ensure_model';
     var wantModel = payload && payload.jimengVideoModel && String(payload.jimengVideoModel).trim() ? String(payload.jimengVideoModel).trim() : 'Seedance 2.0 VIP';
     
-    // There are multiple select boxes (mode, model). We find the model select box by finding the one that is NOT the mode select box.
-    // The mode select box typically contains the text "视频生成" or "全能参考" (after step09/09b).
+    // There are multiple select boxes in the toolbar: Mode, Model, Reference Mode, Duration.
     var modelSelectContainer = null;
-    var selects = doc.querySelectorAll('div[class*="lv-select-single"]');
+    var selects = doc.querySelectorAll('div[class*="toolbar-select"]');
+    if (!selects || selects.length === 0) selects = doc.querySelectorAll('div[class*="lv-select-single"]');
+    
     for (var k = 0; k < selects.length; k++) {
       var inner = selects[k].querySelector('.lv-select-view-value');
       var innerText = inner ? (inner.textContent || '').trim() : '';
-      if (innerText && innerText.indexOf('视频生成') === -1 && innerText.indexOf('图片生成') === -1 && innerText.indexOf('全能参考') === -1) {
+      if (innerText && innerText.indexOf('视频生成') === -1 && innerText.indexOf('图片生成') === -1 && innerText.indexOf('参考') === -1 && !innerText.match(/^\d+s$/)) {
         modelSelectContainer = selects[k];
         break;
       }
     }
-    // Fallback if not found by excluding mode
+    
+    // Fallback if not found
     if (!modelSelectContainer) {
-      // Trying to get the second one, assuming the first is mode and third is duration.
       if (selects.length >= 2) {
         modelSelectContainer = selects[1];
       } else {
-        modelSelectContainer = doc.querySelector('div.toolbar-select-rZZr1T') || doc.querySelector('div[class*="toolbar-select-"]');
+        modelSelectContainer = doc.querySelector('div[class*="toolbar-select"]');
       }
     }
     

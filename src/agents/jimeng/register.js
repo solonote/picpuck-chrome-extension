@@ -71,6 +71,9 @@ registerAgentCommands([
       step10_jimeng_video_ensure_model,
       step11_jimeng_video_ensure_ratio,
       step11b_jimeng_video_ensure_duration,
+      step12_jimeng_clear_form,
+      step13_jimeng_paste_reference_clear_prompt,
+      step14_jimeng_fill_prompt_text,
     ],
   },
 ]);
