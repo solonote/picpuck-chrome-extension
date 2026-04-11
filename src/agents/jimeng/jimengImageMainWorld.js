@@ -1465,16 +1465,29 @@
     while (round < STEP15_MAX_PLACEHOLDER_ROUNDS) {
       round++;
       var inner = target.innerText || target.textContent || '';
-      var m = inner.match(/\(参考音色<占位符>(\d+)\)/); // update regex if changed in frontend
-      if (!m) {
-          m = inner.match(/\(参考音频(\d+)\)/);
-          if (!m) {
-              return { ok: true };
-          }
+      
+      // 我们需要匹配 `(参考音色<占位符>N)` 或者旧的 `(参考音频N)`
+      var m = inner.match(/\(参考音色(<占位符>\d+)\)/);
+      var tokenToSelect = "";
+      var audioNum = 0;
+      
+      if (m) {
+        // m[0] 是完整匹配，如 "(参考音色<占位符>1)"
+        // m[1] 是 "<占位符>1"
+        // 我们只选中 "<占位符>1" 来替换为 @，使得外层的 (参考音色) 被保留下来
+        tokenToSelect = m[1];
+        audioNum = parseInt(m[1].replace("<占位符>", ""), 10);
+      } else {
+        // Fallback
+        var m2 = inner.match(/\(参考音频(\d+)\)/);
+        if (!m2) {
+          return { ok: true };
+        }
+        tokenToSelect = m2[0]; // 旧版逻辑替换整个 (参考音频N)
+        audioNum = parseInt(m2[1], 10);
       }
-      var token = m[0];
-      var n = parseInt(m[1], 10);
-      if (!selectTextInElement(target, token)) {
+      
+      if (!selectTextInElement(target, tokenToSelect)) {
         appendMainLog(roundId, stepKey, 'info', 'Step15b.动作失败+无法选中音频占位符');
         return { ok: false, code: 'JIMENG_AT_PLACEHOLDER_SELECT_FAILED' };
       }
@@ -1493,10 +1506,10 @@
       if (!wPop.ok) {
         return { ok: false, code: wPop.code };
       }
-      var clicked = await clickJimengReferenceAudioOption(n, wPop.popup);
-      appendMainLog(roundId, stepKey, 'debug', 'Step15b.debug.refOption n=' + n + ' ok=' + clicked);
+      var clicked = await clickJimengReferenceAudioOption(audioNum, wPop.popup);
+      appendMainLog(roundId, stepKey, 'debug', 'Step15b.debug.refOption n=' + audioNum + ' ok=' + clicked);
       if (!clicked) {
-        appendMainLog(roundId, stepKey, 'info', 'Step15b.动作失败+下拉已加载但无对应音频项' + n);
+        appendMainLog(roundId, stepKey, 'info', 'Step15b.动作失败+下拉已加载但无对应音频项' + audioNum);
         return { ok: false, code: 'JIMENG_AT_OPTION_NOT_FOUND' };
       }
       await delay(AFTER_OPTION_MS_AT);
