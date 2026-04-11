@@ -1344,7 +1344,7 @@
       else if (mime.indexOf('ogg') !== -1) ext = 'ogg';
       else if (mime.indexOf('aac') !== -1) ext = 'aac';
       
-      var file = new File([blob], 'audio' + (idx + 1) + '.' + ext, { type: mime });
+        var file = new File([blob], 'audio' + (idx + 1) + '.' + ext, { type: mime });
       
       // Try to find an audio input file
       var allFileInps = Array.from(doc.querySelectorAll('input[type="file"]'));
@@ -1355,6 +1355,28 @@
           audioInp = inp;
           break;
         }
+      }
+      
+      // If we didn't find an explicit audio input, let's try to find ANY file input that is visible or in the reference group
+      if (!audioInp && allFileInps.length > 0) {
+          // Look for input in reference group
+          for (var i2 = 0; i2 < allFileInps.length; i2++) {
+              var p2 = allFileInps[i2].parentElement;
+              var isRef = false;
+              while (p2 && p2 !== doc.body) {
+                  var c2 = (p2.className && String(p2.className)) || '';
+                  if (c2.indexOf('reference-group') !== -1 || c2.indexOf('audio-') !== -1) {
+                      isRef = true;
+                      break;
+                  }
+                  p2 = p2.parentElement;
+              }
+              if (isRef) {
+                  audioInp = allFileInps[i2];
+                  break;
+              }
+          }
+          if (!audioInp) audioInp = allFileInps[allFileInps.length > 1 ? 1 : 0]; // fallback
       }
       
       if (audioInp) {
