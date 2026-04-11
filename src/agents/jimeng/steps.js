@@ -566,6 +566,25 @@ export async function step13_jimeng_paste_reference_clear_prompt(ctx) {
   });
 }
 
+export async function step13b_jimeng_video_paste_reference_audio(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step13b_jimeng_video_paste_reference_audio';
+  const audios = payload && Array.isArray(payload.audios) ? payload.audios : [];
+  if (audios.length === 0) {
+    logStepInfo(tabId, roundId, stepKey, 13, '无参考音频跳过粘贴');
+    return;
+  }
+  await execJimengMainRunner(ctx, {
+    nn: 13,
+    stepKey,
+    runnerName: 'runStep13bVideoPasteReferenceAudio',
+    mainPayload: { audios },
+    failUserMsg: '动作失败+即梦参考音频粘贴失败',
+    startMsg: '逐个粘贴参考音频',
+    doneMsg: '参考音频已粘贴',
+  });
+}
+
 /** 写入用户提示词（含占位符文案） */
 export async function step14_jimeng_fill_prompt_text(ctx) {
   const { payload } = ctx;
@@ -602,6 +621,31 @@ export async function step15_jimeng_expand_at_mentions(ctx) {
     },
     failUserMsg: '动作失败+即梦 @ 参考图或占位符校验失败',
     startMsg: '将 (参考图片N) 展开为 @ 并选择对应参考图',
+    doneMsg: '@ 引用已展开',
+  });
+}
+
+/** 视频模式特有：有配音：将 (参考音频N) 换为 @ 并选「音频N」；无配音：跳过 */
+export async function step15b_jimeng_video_expand_audio_mentions(ctx) {
+  const { tabId, roundId, payload } = ctx;
+  const stepKey = 'step15b_jimeng_video_expand_audio_mentions';
+  const audios = payload && Array.isArray(payload.audios) ? payload.audios : [];
+  if (audios.length === 0) {
+    logStepInfo(tabId, roundId, stepKey, 15, '无参考音频跳过展开 @ 引用');
+    return;
+  }
+  logStepInfo(tabId, roundId, stepKey, 15, '选音频前聚焦工作窗口与 Tab');
+  await focusWorkTab(tabId);
+  await execJimengMainRunner(ctx, {
+    nn: 15,
+    stepKey,
+    runnerName: 'runStep15bVideoExpandAudioMentions',
+    mainPayload: {
+      prompt: payloadString(payload, 'prompt'),
+      audios,
+    },
+    failUserMsg: '动作失败+即梦 @ 参考音频或占位符校验失败',
+    startMsg: '将 (参考音频N) 展开为 @ 并选择对应参考音频',
     doneMsg: '@ 引用已展开',
   });
 }

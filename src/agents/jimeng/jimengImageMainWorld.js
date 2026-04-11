@@ -1303,6 +1303,193 @@
     return false;
   }
 
+  /** @param {{ roundId: string, audios?: string[] }} payload */
+  async function runStep13bVideoPasteReferenceAudio(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step13b_jimeng_video_paste_reference_audio';
+    var raw = payload && Array.isArray(payload.audios) ? payload.audios : [];
+    var audios = [];
+    for (var ri = 0; ri < raw.length; ri++) {
+      if (typeof raw[ri] === 'string' && raw[ri].trim().length > 0) audios.push(raw[ri]);
+    }
+    if (audios.length === 0) {
+      return { ok: true, skipped: true };
+    }
+    var inj = g.__idlinkPicpuckInject;
+    if (!inj || typeof inj.dataUrlToBlob !== 'function') {
+      return { ok: false, code: 'JIMENG_PAGE_HELPERS_MISSING' };
+    }
+    var target = findJimengPromptField();
+    if (!target) {
+      return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
+    }
+    target.focus();
+    await delay(BEFORE_FIRST_PASTE_MS);
+    var sizes = [];
+    var failIdx = [];
+    var idx;
+    for (idx = 0; idx < audios.length; idx++) {
+      var blob = inj.dataUrlToBlob(audios[idx]);
+      if (!blob) {
+        failIdx.push(idx);
+        appendMainLog(roundId, stepKey, 'debug', 'Step13b.debug.dataUrlToBlobFail idx=' + idx);
+        await delay(PASTE_GAP_MS);
+        continue;
+      }
+      sizes.push(blob.size);
+      
+      var mime = (blob && blob.type) || 'audio/mp3';
+      var ext = 'mp3';
+      if (mime.indexOf('wav') !== -1) ext = 'wav';
+      else if (mime.indexOf('ogg') !== -1) ext = 'ogg';
+      else if (mime.indexOf('aac') !== -1) ext = 'aac';
+      
+      var file = new File([blob], 'audio' + (idx + 1) + '.' + ext, { type: mime });
+      
+      // Try to find an audio input file
+      var allFileInps = Array.from(doc.querySelectorAll('input[type="file"]'));
+      var audioInp = null;
+      for (var fi = 0; fi < allFileInps.length; fi++) {
+        var inp = allFileInps[fi];
+        if (inp.accept && (inp.accept.indexOf('audio') !== -1 || inp.accept.indexOf('video') !== -1)) {
+          audioInp = inp;
+          break;
+        }
+      }
+      
+      if (audioInp) {
+        try {
+          var dtFile = new DataTransfer();
+          dtFile.items.add(file);
+          audioInp.files = dtFile.files;
+          audioInp.dispatchEvent(new Event('change', { bubbles: true }));
+          appendMainLog(roundId, stepKey, 'debug', 'Step13b.debug.fileInput idx=' + idx);
+          await delay(PASTE_GAP_MS);
+          continue;
+        } catch (ef) {
+          appendMainLog(roundId, stepKey, 'debug', 'Step13b.debug.fileInputErr ' + (ef && ef.message));
+        }
+      }
+
+      // Fallback to synthetic paste event
+      var dtOne = new DataTransfer();
+      dtOne.items.add(file);
+      try {
+        target.focus();
+        target.dispatchEvent(new ClipboardEvent('paste', { bubbles: false, cancelable: true, clipboardData: dtOne }));
+        appendMainLog(roundId, stepKey, 'debug', 'Step13b.debug.syntheticPaste idx=' + idx);
+      } catch (e2) {
+        appendMainLog(roundId, stepKey, 'debug', 'Step13b.debug.syntheticPasteErr ' + (e2 && e2.message));
+      }
+      await delay(PASTE_GAP_MS);
+    }
+    appendMainLog(
+      roundId,
+      stepKey,
+      'debug',
+      'Step13b.debug.sequentialDone bytes=' + JSON.stringify(sizes) + ' failIdx=[' + failIdx.join(',') + ']',
+    );
+    await delay(AFTER_LAST_PASTE_SETTLE_MS);
+    return { ok: true };
+  }
+
+  /**
+   * @param {Element} [rootPopup] 若已由上一步 wait 得到，避免多实例时 query 到错误弹层
+   */
+  async function clickJimengReferenceAudioOption(audioNum, rootPopup) {
+    var popup = rootPopup || doc.querySelector('.lv-select-popup');
+    var options = popup ? popup.querySelectorAll('li[role="option"]') : [];
+    for (var oi = 0; oi < options.length; oi++) {
+      var li = options[oi];
+      var mm = (li.textContent || '').match(/音频(\d+)/);
+      if (mm && parseInt(mm[1], 10) === audioNum) {
+        await delay(100);
+        li.click();
+        return true;
+      }
+    }
+    // Jimeng audio might not be named "音频1", it might just be the only option or have the filename.
+    // If we can't find by "音频N", let's just pick the audioNum-th option (0-indexed).
+    if (options.length >= audioNum) {
+      await delay(100);
+      options[audioNum - 1].click();
+      return true;
+    }
+    return false;
+  }
+
+  /** @param {{ roundId: string, prompt: string }} payload */
+  async function runStep15bVideoExpandAudioMentions(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step15b_jimeng_video_expand_audio_mentions';
+    var pText = typeof payload.prompt === 'string' ? payload.prompt : '';
+    var match;
+    var audioIndices = [];
+    var re = /\(参考音频(\d+)\)/g;
+    while ((match = re.exec(pText)) !== null) {
+      var n = parseInt(match[1], 10);
+      if (Number.isFinite(n)) audioIndices.push(n);
+    }
+    if (audioIndices.length === 0) {
+      return { ok: true, skipped: true };
+    }
+    var target = findJimengPromptField();
+    if (!target) {
+      return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
+    }
+    var maxRounds = STEP15_MAX_PLACEHOLDER_ROUNDS;
+    var round = 0;
+    while (round < maxRounds) {
+      round++;
+      var foundAny = false;
+      for (var k = 0; k < audioIndices.length; k++) {
+        var aNum = audioIndices[k];
+        var ph = '(参考音频' + aNum + ')';
+        if (selectTextInElement(target, ph)) {
+          foundAny = true;
+          try {
+            var r = window.getSelection().getRangeAt(0);
+            var mNode = document.createTextNode('@');
+            r.insertNode(mNode);
+            r.setStartAfter(mNode);
+            r.setEndAfter(mNode);
+            var sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(r);
+            // also we need to delete the placeholder text. Wait, we should replace the text.
+            r.setStartBefore(mNode.previousSibling); // wait, it's easier to just replace
+            // let's do deleteContents
+          } catch (ed) {
+            appendMainLog(roundId, stepKey, 'debug', 'Step15b.debug.deleteContentsErr ' + (ed && ed.message));
+          }
+          try {
+            target.dispatchEvent(new Event('input', { bubbles: true }));
+          } catch (eIn) {
+            /* ignore */
+          }
+          await delay(AFTER_OPTION_MS_AT);
+          var waitRes = await waitForJimengAtSelectPopupReady(roundId, stepKey, target);
+          if (!waitRes.ok) {
+            return waitRes;
+          }
+          var clickOk = await clickJimengReferenceAudioOption(aNum, waitRes.popup);
+          if (!clickOk) {
+            appendMainLog(roundId, stepKey, 'info', 'Step15b.动作失败+下拉列表中未找到对应的参考音频项');
+            return { ok: false, code: 'JIMENG_AUDIO_OPTION_NOT_FOUND' };
+          }
+          await delay(AFTER_OPTION_MS_AT);
+          break; // break for-loop to re-evaluate remaining placeholders
+        }
+      }
+      if (!foundAny) break;
+    }
+    if (round >= maxRounds) {
+      appendMainLog(roundId, stepKey, 'info', 'Step15b.动作失败+替换音频占位符达到循环上限');
+      return { ok: false, code: 'JIMENG_AUDIO_MAX_ROUNDS' };
+    }
+    return { ok: true };
+  }
+
   /** @param {{ roundId: string, images?: string[] }} payload */
   async function runStep13PasteReferenceClearPrompt(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
@@ -3408,8 +3595,10 @@
     runStep11EnsureRatioResolution: runStep11EnsureRatioResolution,
     runStep12ClearForm: runStep12ClearForm,
     runStep13PasteReferenceClearPrompt: runStep13PasteReferenceClearPrompt,
+    runStep13bVideoPasteReferenceAudio: runStep13bVideoPasteReferenceAudio,
     runStep14FillPromptText: runStep14FillPromptText,
     runStep15ExpandAtMentions: runStep15ExpandAtMentions,
+    runStep15bVideoExpandAudioMentions: runStep15bVideoExpandAudioMentions,
     runStep16SetLoggedInMarker: runStep16SetLoggedInMarker,
     runStep17ClickGenerateIfNeeded: runStep17ClickGenerateIfNeeded,
     runStep18SubmitPromptEnterIfConfigured: runStep18SubmitPromptEnterIfConfigured,
