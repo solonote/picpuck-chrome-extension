@@ -3062,21 +3062,37 @@
       appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图数量不足 need=' + n + ' have=' + imgs0.length);
       return { ok: false, code: 'JIMENG_GENERATE_NO_OUTPUT' };
     }
-    var collected = [];
+    
+    var hasReloaded = false;
+    try { hasReloaded = !!sessionStorage.getItem('jimeng_copy_reload_' + roundId); } catch(e){}
+    var handleCopyError = function(errCode) {
+      if (collected.length > 0) {
+        appendMainLog(roundId, stepKey, 'info', 'Step21.部分图复制失败忽略该错+保留已收集张数=' + collected.length);
+        return 'break';
+      }
+      if (ii === 0 && !hasReloaded) {
+        appendMainLog(roundId, stepKey, 'info', 'Step21.第一张图复制失败+尝试刷新页面重试一次');
+        try { sessionStorage.setItem('jimeng_copy_reload_' + roundId, '1'); } catch(e){}
+        setTimeout(function() { location.reload(); }, 500);
+        return 'reload';
+      }
+      return errCode;
+    };
+    \n    var collected = [];
     var prevB64 = '';
     var ii;
-    for (ii = 0; ii < n; ii++) {
+    imageLoop: for (ii = 0; ii < n; ii++) {
       var rootFresh = resolveJimengRecordRoot(doc, anchor);
       var imgsFresh = listJimengResultImagesOrdered(rootFresh);
       if (imgsFresh.length <= ii) {
         appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图数量不足');
-        return { ok: false, code: 'JIMENG_GENERATE_NO_OUTPUT' };
+        { var errAct = handleCopyError('JIMENG_GENERATE_NO_OUTPUT'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
       }
       var imgEl = imgsFresh[ii];
       var readyOk = await ensureJimengResultImageReadyForCopy(imgEl, roundId, stepKey);
       if (!readyOk) {
         appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图未加载完成');
-        return { ok: false, code: 'JIMENG_GENERATE_NO_OUTPUT' };
+        { var errAct = handleCopyError('JIMENG_GENERATE_NO_OUTPUT'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
       }
       appendMainLog(
         roundId,
@@ -3112,7 +3128,7 @@
           dispatchSyntheticContextMenu(card, cx, cy);
         } catch (eCm) {
           appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.contextmenuErr ' + (eCm && eCm.message));
-          return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+          { var errAct = handleCopyError('JIMENG_CONTEXT_MENU_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
         }
         await delay(500);
         var menuFound = null;
@@ -3126,7 +3142,7 @@
           appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.noCopyMenu attempt=' + copyAttempt);
           if (copyAttempt >= COPY_RETRY_MAX) {
             appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+未找到复制图片菜单');
-            return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+            { var errAct = handleCopyError('JIMENG_CONTEXT_MENU_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
           }
           await delay(400);
           continue copyRetry;
@@ -3136,7 +3152,7 @@
         if (!menuNow) {
           appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.menuVanishedAfterSettle a=' + copyAttempt);
           if (copyAttempt >= COPY_RETRY_MAX) {
-            return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+            { var errAct = handleCopyError('JIMENG_CONTEXT_MENU_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
           }
           await delay(400);
           continue copyRetry;
@@ -3146,7 +3162,7 @@
           if (clickEl && clickEl.click) clickEl.click();
           else menuNow.menuRoot.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
         } catch (eCk) {
-          if (copyAttempt >= COPY_RETRY_MAX) return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+          if (copyAttempt >= COPY_RETRY_MAX) { var errAct = handleCopyError('JIMENG_CONTEXT_MENU_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
           await delay(400);
           continue copyRetry;
         }
@@ -3165,7 +3181,7 @@
             await delay(450);
             if (copyAttempt >= COPY_RETRY_MAX) {
               appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制失败提示且重试耗尽');
-              return { ok: false, code: 'JIMENG_COPY_TOAST_FAILED' };
+              { var errAct = handleCopyError('JIMENG_COPY_TOAST_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
             }
             continue copyRetry;
           }
@@ -3184,7 +3200,7 @@
           );
           if (copyAttempt >= COPY_RETRY_MAX) {
             appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制后未出现复制中或下载中进度提示');
-            return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+            { var errAct = handleCopyError('JIMENG_CONTEXT_MENU_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
           }
           await delay(400);
           continue copyRetry;
@@ -3204,7 +3220,7 @@
             await delay(450);
             if (copyAttempt >= COPY_RETRY_MAX) {
               appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制失败提示且重试耗尽');
-              return { ok: false, code: 'JIMENG_COPY_TOAST_FAILED' };
+              { var errAct = handleCopyError('JIMENG_COPY_TOAST_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
             }
             continue copyRetry;
           }
@@ -3218,7 +3234,7 @@
           appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.copySuccessToastTimeout a=' + copyAttempt);
           if (copyAttempt >= COPY_RETRY_MAX) {
             appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制后未出现复制成功提示');
-            return { ok: false, code: 'JIMENG_CONTEXT_MENU_FAILED' };
+            { var errAct = handleCopyError('JIMENG_CONTEXT_MENU_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
           }
           await delay(400);
           continue copyRetry;
@@ -3239,7 +3255,7 @@
             await delay(450);
             if (copyAttempt >= COPY_RETRY_MAX) {
               appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制失败提示且重试耗尽');
-              return { ok: false, code: 'JIMENG_COPY_TOAST_FAILED' };
+              { var errAct = handleCopyError('JIMENG_COPY_TOAST_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
             }
             continue copyRetry;
           }
@@ -3252,7 +3268,7 @@
         appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.clipboardRetryAfterToast a=' + copyAttempt);
         if (copyAttempt >= COPY_RETRY_MAX) {
           appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+剪贴板读取图片超时或失败');
-          return { ok: false, code: clipRes && clipRes.code ? clipRes.code : 'JIMENG_CLIPBOARD_IMAGE_TIMEOUT' };
+          { var errAct = handleCopyError(clipRes && clipRes.code ? clipRes.code : 'JIMENG_CLIPBOARD_IMAGE_TIMEOUT'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
         }
         await delay(500);
       }
