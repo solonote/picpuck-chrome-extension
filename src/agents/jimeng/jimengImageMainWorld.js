@@ -3073,7 +3073,7 @@
       if (ii === 0 && !hasReloaded) {
         appendMainLog(roundId, stepKey, 'info', 'Step21.第一张图复制失败+尝试刷新页面重试一次');
         try { sessionStorage.setItem('jimeng_copy_reload_' + roundId, '1'); } catch(e){}
-        setTimeout(function() { location.reload(); }, 500);
+        setTimeout(function() { window.location.reload(); }, 500);
         return 'reload';
       }
       return errCode;
