@@ -1,6 +1,6 @@
 /**
  * 豆包对话页 MAIN 世界：由 SW executeScript 注入；通过 globalThis.__picpuckDoubaoImage 暴露各步 runner。
- * 选择器以 data-skill-id、role、文案子串为主，禁止依赖 CSS Modules 哈希类名。
+ * 主对话：前缀「请帮我生成图片/视频」+ 熔炉 prompt，不点「图像生成」或「视频」工作台。
  */
 (function () {
   const g = typeof globalThis !== 'undefined' ? globalThis : window;
@@ -16,8 +16,7 @@
   }
 
   /**
-   * 工作台打开后，页内往往同时存在「主对话」与「图像/视频生成」两处 contenteditable；
-   * 必须优先 `#input-engine-container` 内的输入区，否则词会写进错误 Slate，随后被工作台状态清掉（表现为填完瞬间消失）。
+   * 主会话输入区：优先 **不在** `#input-engine-container` 工作台内的 Slate（当前产品走主对话自然语言，不点技能）。
    */
   function findComposerEditor() {
     const host = document.querySelector('#input-engine-container');
@@ -26,12 +25,10 @@
         '[data-slate-editor="true"][role="textbox"][contenteditable="true"], [role="textbox"][contenteditable="true"]',
       ),
     ).filter(editorRectUsable);
-    if (host) {
-      const inner = candidates.find((el) => host.contains(el));
-      if (inner) return inner;
-    }
-    const slate = candidates.find((el) => el.getAttribute('data-slate-editor') === 'true');
-    return slate || candidates[0] || null;
+    const outside = candidates.filter((el) => !host || !host.contains(el));
+    const pool = outside.length ? outside : candidates;
+    const slate = pool.find((el) => el.getAttribute('data-slate-editor') === 'true');
+    return slate || pool[0] || null;
   }
 
   async function dataUrlToBlob(dataUrl) {
@@ -70,78 +67,23 @@
   }
 
   /**
-   * 是否已在「图像生成」工作台：选技能后豆包常把入口收成 chip（div + data-value，不再渲染 skill_bar_button_3 按钮）。
-   * 与下方「比例」下拉同源信号，避免用户已选手动仍报 DOUBAO_SKILL_NOT_FOUND。
+   * 熔炉 `prompt` 前加主对话意图前缀；若正文已含「请帮我生成图片/视频」则不再叠一层。
    */
-  function isDoubaoImageGenerationModeActive() {
-    const chips = Array.from(document.querySelectorAll('[data-value="3"]'));
-    for (let i = 0; i < chips.length; i += 1) {
-      const el = chips[i];
-      const r = el.getBoundingClientRect();
-      if (r.width < 4 || r.height < 4) continue;
-      if (String(el.textContent || '').includes('图像生成')) return true;
-    }
-    const triggers = Array.from(document.querySelectorAll('[data-slot="dropdown-menu-trigger"]'));
-    if (triggers.some((t) => String(t.textContent || '').includes('比例'))) return true;
-    return false;
-  }
-
-  function clickImageGenerationSkill() {
-    if (isDoubaoImageGenerationModeActive()) return true;
-    const bySkill = document.querySelector('[data-skill-id="skill_bar_button_3"]');
-    if (bySkill) {
-      bySkill.click();
-      return true;
-    }
-    const items = Array.from(document.querySelectorAll('[data-component-type="skill-item"]'));
-    const hit = items.find((el) => (el.textContent || '').includes('图像生成'));
-    if (hit) {
-      hit.click();
-      return true;
-    }
-    return false;
-  }
-
-  /** Tab 文案归一：豆包页内常见空白 / NBSP，避免 trim 后仍不等于「视频」。 */
-  function normalizeWorkbenchTabLabel(el) {
-    return (el.textContent || '')
-      .replace(/\u00a0/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  /** 图像生成面板内「图像 / 视频」切换：点「视频」Tab（不依赖 Radix 动态 id）。 */
-  function clickVideoTabInGenerationWorkbench() {
-    const tabSelectors =
-      '[data-slot="tabs"] button[role="tab"], [data-slot="tabs-list"] button[role="tab"], button[role="tab"][data-slot="tabs-trigger"]';
-    /** 你提供的整页 HTML 中，图像/视频 Tab 位于 `#input-engine-container` 内；先限定范围避免点到页面上其它 role=tab。 */
-    const roots = [];
-    const inputHost = document.querySelector('#input-engine-container');
-    if (inputHost) roots.push(inputHost);
-    roots.push(document);
-
-    for (let r = 0; r < roots.length; r += 1) {
-      const scoped = Array.from(roots[r].querySelectorAll(tabSelectors));
-      const byText = scoped.find((b) => normalizeWorkbenchTabLabel(b) === '视频');
-      if (byText) {
-        byText.click();
-        return true;
-      }
-    }
-
-    const anyTab = Array.from(document.querySelectorAll('button[role="tab"][data-slot="tabs-trigger"]'));
-    const loose = anyTab.find((b) => normalizeWorkbenchTabLabel(b) === '视频');
-    if (loose) {
-      loose.click();
-      return true;
-    }
-    return false;
+  function buildDoubaoChatFullPrompt(payload) {
+    const rawLead =
+      typeof payload.doubaoLeadIn === 'string' && payload.doubaoLeadIn.trim()
+        ? payload.doubaoLeadIn.trim()
+        : '请帮我生成图片，';
+    const body = typeof payload.prompt === 'string' ? payload.prompt : '';
+    if (!body) return rawLead;
+    if (body.startsWith(rawLead)) return body;
+    if (/^\s*请帮我生成(图片|视频)/.test(body)) return body;
+    return rawLead + body;
   }
 
   /**
-   * 豆包输入区为 Slate：`appendChild` 裸文本会破坏内部 DOM，选区落在非 Slate 节点上即报
-   * `Cannot resolve a Slate node from DOM node`（常见为 HTMLSpanElement）。
-   * 仅用 `insertText` / 合成 `text/plain` 的 paste，与 Slate 更新路径对齐。
+   * 豆包输入区为 Slate：`appendChild` 裸文本会破坏内部 DOM。
+   * 仅用 `insertText` / 合成 `text/plain` 的 paste。
    */
   async function insertPlainTextIntoEditor(ed, text) {
     const s = typeof text === 'string' ? text : '';
@@ -196,39 +138,22 @@
       return { ok: true };
     },
 
-    async runStep05_doubao_click_image_mode() {
-      if (!clickImageGenerationSkill()) {
-        return { ok: false, code: 'DOUBAO_SKILL_NOT_FOUND', detail: '未找到图像生成入口' };
-      }
-      await sleep(600);
-      return { ok: true };
-    },
-
-    async runStep05b_doubao_click_video_tab() {
-      await sleep(900);
-      if (!clickVideoTabInGenerationWorkbench()) {
-        return { ok: false, code: 'DOUBAO_VIDEO_TAB_NOT_FOUND', detail: '未找到「视频」Tab' };
-      }
-      await sleep(500);
-      return { ok: true };
-    },
-
     async runStep07_doubao_paste_images_and_prompt(payload) {
       let ed = findComposerEditor();
       if (!ed) {
-        return { ok: false, code: 'DOUBAO_EDITOR_NOT_FOUND', detail: '未找到对话输入框' };
+        return { ok: false, code: 'DOUBAO_EDITOR_NOT_FOUND', detail: '未找到主对话输入框' };
       }
       const images = Array.isArray(payload.images) ? payload.images.filter((x) => typeof x === 'string' && x) : [];
       for (let i = 0; i < images.length; i += 1) {
         ed = findComposerEditor() || ed;
         await pasteImageDataUrlIntoEditor(ed, images[i]);
       }
-      const prompt = typeof payload.prompt === 'string' ? payload.prompt : '';
+      const fullPrompt = buildDoubaoChatFullPrompt(payload);
       ed = findComposerEditor() || ed;
       if (!ed) {
         return { ok: false, code: 'DOUBAO_EDITOR_NOT_FOUND', detail: '贴图后未找到输入框' };
       }
-      await insertPlainTextIntoEditor(ed, prompt);
+      await insertPlainTextIntoEditor(ed, fullPrompt);
       return { ok: true };
     },
 

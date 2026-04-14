@@ -11,11 +11,6 @@ function payloadFillOnly(payload) {
   return !!(payload && typeof payload === 'object' && payload.fillOnly);
 }
 
-/** `DOUBAO_VIDEO_FILL` 在粘贴前多一步「视频」Tab，其后业务步日志序号顺延 1。 */
-function doubaoPostVideoTabNnOffset(ctx) {
-  return ctx.command === 'DOUBAO_VIDEO_FILL' ? 1 : 0;
-}
-
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -194,36 +189,16 @@ export async function step05_doubao_require_logged_in(ctx) {
   });
 }
 
-export async function step06_doubao_click_image_generation(ctx) {
+export async function step08_doubao_paste_images_and_prompt(ctx) {
+  const leadIn =
+    ctx.command === 'DOUBAO_VIDEO_FILL' ? '请帮我生成视频，' : '请帮我生成图片，';
   await execDoubaoMainRunner(ctx, {
     nn: 6,
-    stepKey: 'step06_doubao_click_image_generation',
-    runnerName: 'runStep05_doubao_click_image_mode',
-    failUserMsg: '动作失败+无法进入豆包图像生成',
-    startMsg: '点击图像生成',
-    doneMsg: '已进入图像生成',
-  });
-}
-
-/** 豆包视频（Seendance）：进入图像生成后切换到「视频」子 Tab。 */
-export async function step06b_doubao_click_video_tab(ctx) {
-  await execDoubaoMainRunner(ctx, {
-    nn: 7,
-    stepKey: 'step06b_doubao_click_video_tab',
-    runnerName: 'runStep05b_doubao_click_video_tab',
-    failUserMsg: '动作失败+无法切换到豆包视频',
-    startMsg: '点击视频 Tab',
-    doneMsg: '已切换到视频',
-  });
-}
-
-export async function step08_doubao_paste_images_and_prompt(ctx) {
-  await execDoubaoMainRunner(ctx, {
-    nn: 7 + doubaoPostVideoTabNnOffset(ctx),
     stepKey: 'step08_doubao_paste_images_and_prompt',
     runnerName: 'runStep07_doubao_paste_images_and_prompt',
+    mainPayload: { doubaoLeadIn: leadIn },
     failUserMsg: '动作失败+无法粘贴参考图或提示词',
-    startMsg: '粘贴参考图并写入提示词',
+    startMsg: '主对话区粘贴参考图并写入提示词（含生成意图前缀）',
     doneMsg: '输入区已就绪',
   });
 }
@@ -231,7 +206,7 @@ export async function step08_doubao_paste_images_and_prompt(ctx) {
 export async function step09_doubao_submit_enter(ctx) {
   const { tabId, roundId, command, payload } = ctx;
   const stepKey = 'step09_doubao_submit_enter';
-  const nn = 8 + doubaoPostVideoTabNnOffset(ctx);
+  const nn = 7;
   // 豆包视频：默认只填词贴图，由用户在页内点生成；与 Gemini `step11_gemini_submit_enter_if_needed` 的 fillOnly 语义对齐。
   if (command === 'DOUBAO_VIDEO_FILL' && payloadFillOnly(payload) && !payload.furnaceDirectSubmit) {
     logStepInfo(tabId, roundId, stepKey, nn, '豆包视频填词模式跳过 Enter，请在页内确认生成');
@@ -251,5 +226,5 @@ export async function step09_doubao_submit_enter(ctx) {
 export async function step10_doubao_noop_anchor(ctx) {
   const { tabId, roundId } = ctx;
   const stepKey = 'step10_doubao_noop_anchor';
-  logStepInfo(tabId, roundId, stepKey, 9 + doubaoPostVideoTabNnOffset(ctx), '豆包路径不登记异步锚点与回图');
+  logStepInfo(tabId, roundId, stepKey, 8, '豆包路径不登记异步锚点与回图');
 }
