@@ -52,8 +52,26 @@
     });
   }
 
+  /**
+   * 是否已在「图像生成」工作台：选技能后豆包常把入口收成 chip（div + data-value，不再渲染 skill_bar_button_3 按钮）。
+   * 与下方「比例」下拉同源信号，避免用户已选手动仍报 DOUBAO_SKILL_NOT_FOUND。
+   */
+  function isDoubaoImageGenerationModeActive() {
+    const chips = Array.from(document.querySelectorAll('[data-value="3"]'));
+    for (let i = 0; i < chips.length; i += 1) {
+      const el = chips[i];
+      const r = el.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4) continue;
+      if (String(el.textContent || '').includes('图像生成')) return true;
+    }
+    const triggers = Array.from(document.querySelectorAll('[data-slot="dropdown-menu-trigger"]'));
+    if (triggers.some((t) => String(t.textContent || '').includes('比例'))) return true;
+    return false;
+  }
+
   function clickImageGenerationSkill() {
-    const bySkill = document.querySelector('button[data-skill-id="skill_bar_button_3"]');
+    if (isDoubaoImageGenerationModeActive()) return true;
+    const bySkill = document.querySelector('[data-skill-id="skill_bar_button_3"]');
     if (bySkill) {
       bySkill.click();
       return true;
