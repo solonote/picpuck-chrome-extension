@@ -3042,10 +3042,11 @@
       roundId,
       stepKey,
       'info',
-      'Step21.info.waitAfterLoadBeforeCopy ms=' + STEP21_AFTER_LOAD_COMPLETE_BEFORE_COPY_MS,
+      'Step21.info.waitAfterLoadBeforeCollect ms=' + STEP21_AFTER_LOAD_COMPLETE_BEFORE_COPY_MS,
     );
     await delay(STEP21_AFTER_LOAD_COMPLETE_BEFORE_COPY_MS);
-    appendMainLog(roundId, stepKey, 'info', 'Step21.开始从即梦结果区逐张复制图片+目标张数=' + n);
+    appendMainLog(roundId, stepKey, 'info', 'Step21.开始提取即梦高清结果图+目标张数=' + n);
+    
     var alignDeadline = Date.now() + 20000;
     var imgs0 = [];
     var root0 = null;
@@ -3062,240 +3063,104 @@
       appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图数量不足 need=' + n + ' have=' + imgs0.length);
       return { ok: false, code: 'JIMENG_GENERATE_NO_OUTPUT' };
     }
-    
-    var hasReloaded = false;
-    try { hasReloaded = !!sessionStorage.getItem('jimeng_copy_reload_' + roundId); } catch(e){}
-    var handleCopyError = function(errCode) {
-      if (collected.length > 0) {
-        appendMainLog(roundId, stepKey, 'info', 'Step21.部分图复制失败忽略该错+保留已收集张数=' + collected.length);
-        return 'break';
-      }
-      if (ii === 0 && !hasReloaded) {
-        appendMainLog(roundId, stepKey, 'info', 'Step21.第一张图复制失败+尝试刷新页面重试一次');
-        try { sessionStorage.setItem('jimeng_copy_reload_' + roundId, '1'); } catch(e){}
-        setTimeout(function() { window.location.reload(); }, 500);
-        return 'reload';
-      }
-      return errCode;
-    };
-    \n    var collected = [];
-    var prevB64 = '';
-    var ii;
-    imageLoop: for (ii = 0; ii < n; ii++) {
-      var rootFresh = resolveJimengRecordRoot(doc, anchor);
-      var imgsFresh = listJimengResultImagesOrdered(rootFresh);
-      if (imgsFresh.length <= ii) {
-        appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图数量不足');
-        { var errAct = handleCopyError('JIMENG_GENERATE_NO_OUTPUT'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
-      }
-      var imgEl = imgsFresh[ii];
-      var readyOk = await ensureJimengResultImageReadyForCopy(imgEl, roundId, stepKey);
-      if (!readyOk) {
-        appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+结果图未加载完成');
-        { var errAct = handleCopyError('JIMENG_GENERATE_NO_OUTPUT'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
-      }
-      appendMainLog(
-        roundId,
-        stepKey,
-        'debug',
-        'Step21.debug.imgReady idx=' + ii + ' ' + imgEl.naturalWidth + 'x' + imgEl.naturalHeight,
-      );
-      var pick = resolveContextMenuDispatchTarget(imgEl);
-      appendMainLog(
-        roundId,
-        stepKey,
-        'debug',
-        'Step21.debug.contextmenuTarget idx=' + ii + ' via=' + pick.via + ' degraded=' + pick.degraded,
-      );
-      var card = pick.target;
-      if (ii === 0) {
-        await primeJimengFirstResultCardBeforeContextMenu(card, imgEl, roundId, stepKey);
-      }
-      var rCard = card.getBoundingClientRect();
-      var cx = rCard.left + Math.min(rCard.width / 2, 120);
-      var cy = rCard.top + Math.min(rCard.height / 2, 120);
-      var COPY_RETRY_MAX = 3;
-      var COPY_PROGRESS_WAIT_MS = 2000;
-      var COPY_SUCCESS_WAIT_MS = 45000;
-      var clipReadMs = 20000;
-      var copyAttempt = 0;
-      var clipRes = null;
-        copyRetry: while (copyAttempt < COPY_RETRY_MAX) {
-        copyAttempt++;
-        clearAllJimengToasts();
-        await delay(220);
-        try {
-          dispatchSyntheticContextMenu(card, cx, cy);
-        } catch (eCm) {
-          appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.contextmenuErr ' + (eCm && eCm.message));
-          { var errAct = handleCopyError('JIMENG_CONTEXT_MENU_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
-        }
-        await delay(500);
-        var menuFound = null;
-        var tMenu = Date.now() + 8000;
-        while (Date.now() < tMenu) {
-          menuFound = findVisibleJimengContextMenuWithCopy();
-          if (menuFound) break;
-          await delay(80);
-        }
-        if (!menuFound) {
-          appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.noCopyMenu attempt=' + copyAttempt);
-          if (copyAttempt >= COPY_RETRY_MAX) {
-            appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+未找到复制图片菜单');
-            { var errAct = handleCopyError('JIMENG_CONTEXT_MENU_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
+
+    var firstImg = imgs0[0];
+    var clickTarget = findJimengResultImageCardRoleButton(firstImg) || firstImg;
+    try { clickTarget.scrollIntoView({ block: 'center' }); } catch(e){}
+    await delay(150);
+    clickTarget.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    appendMainLog(roundId, stepKey, 'info', 'Step21.已点击结果图打开画廊提取高清图');
+    await delay(800);
+
+    var collected = [];
+    var lastSrcs = [];
+
+    for (var ii = 0; ii < n; ii++) {
+       if (ii > 0) {
+          var thumbs = doc.querySelectorAll('.lv-modal-wrapper .image-thumbnail-holder-au3bpp');
+          if (thumbs && thumbs.length > ii) {
+             thumbs[ii].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+             await delay(300);
+          } else {
+             var arrows = doc.querySelectorAll('.lv-modal-wrapper .arrow-container-UvRNxR');
+             if (arrows && arrows.length > 1) {
+                arrows[1].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                await delay(300);
+             }
           }
-          await delay(400);
-          continue copyRetry;
-        }
-        await delay(500);
-        var menuNow = findVisibleJimengContextMenuWithCopy();
-        if (!menuNow) {
-          appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.menuVanishedAfterSettle a=' + copyAttempt);
-          if (copyAttempt >= COPY_RETRY_MAX) {
-            { var errAct = handleCopyError('JIMENG_CONTEXT_MENU_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
+       }
+
+       var detailImg = null;
+       var tModal = Date.now() + 15000;
+       var b64Found = null;
+       var contentType = 'image/png';
+       
+       while (Date.now() < tModal) {
+          detailImg = doc.querySelector('img[data-apm-action="ai-generated-image-detail-card"]');
+          if (detailImg && detailImg.complete && detailImg.naturalWidth > 0 && detailImg.src && detailImg.src.indexOf('http') === 0) {
+             if (lastSrcs.indexOf(detailImg.src) === -1) {
+                try {
+                   var canvas = doc.createElement('canvas');
+                   canvas.width = detailImg.naturalWidth;
+                   canvas.height = detailImg.naturalHeight;
+                   var ctx2d = canvas.getContext('2d');
+                   ctx2d.drawImage(detailImg, 0, 0);
+                   b64Found = canvas.toDataURL('image/png');
+                   lastSrcs.push(detailImg.src);
+                   break;
+                } catch (eC) {
+                   appendMainLog(roundId, stepKey, 'debug', 'Step21.Canvas提取报错:' + eC);
+                   try {
+                      var res = await fetch(detailImg.src, { mode: 'cors' });
+                      var blob = await res.blob();
+                      contentType = blob.type || 'image/png';
+                      var reader = new FileReader();
+                      b64Found = await new Promise(function(resolve) {
+                          reader.onloadend = function() { resolve(reader.result); };
+                          reader.readAsDataURL(blob);
+                      });
+                      lastSrcs.push(detailImg.src);
+                      break;
+                   } catch(eF) {
+                      appendMainLog(roundId, stepKey, 'debug', 'Step21.Fetch提取报错:' + eF);
+                      break;
+                   }
+                }
+             }
           }
-          await delay(400);
-          continue copyRetry;
-        }
-        try {
-          var clickEl = menuNow.itemEl;
-          if (clickEl && clickEl.click) clickEl.click();
-          else menuNow.menuRoot.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-        } catch (eCk) {
-          if (copyAttempt >= COPY_RETRY_MAX) { var errAct = handleCopyError('JIMENG_CONTEXT_MENU_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
-          await delay(400);
-          continue copyRetry;
-        }
-        await delay(120);
-        var sawProgress = false;
-        var tProg = Date.now() + COPY_PROGRESS_WAIT_MS;
-        while (Date.now() < tProg) {
-          if (findVisibleJimengCopyFailureToast()) {
-            appendMainLog(
-              roundId,
-              stepKey,
-              'debug',
-              'Step21.debug.copyFailureToastDuringProgress a=' + copyAttempt,
-            );
-            clearAllJimengToasts();
-            await delay(450);
-            if (copyAttempt >= COPY_RETRY_MAX) {
-              appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制失败提示且重试耗尽');
-              { var errAct = handleCopyError('JIMENG_COPY_TOAST_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
-            }
-            continue copyRetry;
-          }
-          if (findVisibleJimengCopyDownloadToast()) {
-            sawProgress = true;
-            break;
-          }
-          await delay(45);
-        }
-        if (!sawProgress) {
-          appendMainLog(
-            roundId,
-            stepKey,
-            'debug',
-            'Step21.debug.copyNoProgressToast2s a=' + copyAttempt,
-          );
-          if (copyAttempt >= COPY_RETRY_MAX) {
-            appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制后未出现复制中或下载中进度提示');
-            { var errAct = handleCopyError('JIMENG_CONTEXT_MENU_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
-          }
-          await delay(400);
-          continue copyRetry;
-        }
-        appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.sawCopyProgressToast a=' + copyAttempt);
-        var sawSuccessToast = false;
-        var tOk = Date.now() + COPY_SUCCESS_WAIT_MS;
-        while (Date.now() < tOk) {
-          if (findVisibleJimengCopyFailureToast()) {
-            appendMainLog(
-              roundId,
-              stepKey,
-              'debug',
-              'Step21.debug.copyFailureToastBeforeSuccess a=' + copyAttempt,
-            );
-            clearAllJimengToasts();
-            await delay(450);
-            if (copyAttempt >= COPY_RETRY_MAX) {
-              appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制失败提示且重试耗尽');
-              { var errAct = handleCopyError('JIMENG_COPY_TOAST_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
-            }
-            continue copyRetry;
-          }
-          if (findVisibleJimengCopySuccessToast()) {
-            sawSuccessToast = true;
-            break;
-          }
-          await delay(90);
-        }
-        if (!sawSuccessToast) {
-          appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.copySuccessToastTimeout a=' + copyAttempt);
-          if (copyAttempt >= COPY_RETRY_MAX) {
-            appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制后未出现复制成功提示');
-            { var errAct = handleCopyError('JIMENG_CONTEXT_MENU_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
-          }
-          await delay(400);
-          continue copyRetry;
-        }
-        appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.sawCopySuccessToast a=' + copyAttempt);
-        await delay(250);
-        clipRes = await waitJimengClipboardReadFromIsolatedWorld(roundId, prevB64, clipReadMs);
-        if (!clipRes || !clipRes.ok || typeof clipRes.imageBase64 !== 'string' || !clipRes.imageBase64) {
-          appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.clipboardEmptyOrTimeout firstPass a=' + copyAttempt);
-          if (findVisibleJimengCopyFailureToast()) {
-            appendMainLog(
-              roundId,
-              stepKey,
-              'debug',
-              'Step21.debug.copyFailureToastAfterClipboardMiss a=' + copyAttempt,
-            );
-            clearAllJimengToasts();
-            await delay(450);
-            if (copyAttempt >= COPY_RETRY_MAX) {
-              appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+复制失败提示且重试耗尽');
-              { var errAct = handleCopyError('JIMENG_COPY_TOAST_FAILED'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
-            }
-            continue copyRetry;
-          }
-          await delay(400);
-          clipRes = await waitJimengClipboardReadFromIsolatedWorld(roundId, prevB64, clipReadMs);
-        }
-        if (clipRes && clipRes.ok && typeof clipRes.imageBase64 === 'string' && clipRes.imageBase64) {
-          break copyRetry;
-        }
-        appendMainLog(roundId, stepKey, 'debug', 'Step21.debug.clipboardRetryAfterToast a=' + copyAttempt);
-        if (copyAttempt >= COPY_RETRY_MAX) {
-          appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+剪贴板读取图片超时或失败');
-          { var errAct = handleCopyError(clipRes && clipRes.code ? clipRes.code : 'JIMENG_CLIPBOARD_IMAGE_TIMEOUT'); if (errAct === 'break') break imageLoop; if (errAct === 'reload') return new Promise(function(){}); return { ok: false, code: errAct }; }
-        }
-        await delay(500);
-      }
-      prevB64 = clipRes.imageBase64;
-        collected.push({
-          imageBase64: clipRes.imageBase64,
-          contentType: typeof clipRes.contentType === 'string' && clipRes.contentType ? clipRes.contentType : 'image/png',
-        });
-        try {
-          window.postMessage(
-            {
-              picpuckBridge: true,
-              kind: 'JIMENG_CHUNKED_IMAGE_RELAY',
-              roundId: roundId,
-              imageBase64: clipRes.imageBase64,
-              contentType: typeof clipRes.contentType === 'string' && clipRes.contentType ? clipRes.contentType : 'image/png',
-            },
-            location.origin
-          );
-        } catch (eRelay) {
-          /* ignore */
-        }
-        await delay(200);
-      }
-      appendMainLog(roundId, stepKey, 'info', 'Step21.已从剪贴板收集即梦结果图+张数=' + collected.length);
-      return { ok: true, images: [] }; // images are relayed chunk by chunk to avoid executeScript hang
+          await delay(150);
+       }
+
+       if (b64Found) {
+          collected.push(b64Found);
+          try {
+             window.postMessage(
+               {
+                 picpuckBridge: true,
+                 kind: 'JIMENG_CHUNKED_IMAGE_RELAY',
+                 roundId: roundId,
+                 imageBase64: b64Found,
+                 contentType: contentType
+               },
+               location.origin
+             );
+          } catch (eRelay) {}
+       } else {
+          appendMainLog(roundId, stepKey, 'info', 'Step21.动作失败+第' + (ii + 1) + '张图提取失败或超时');
+       }
     }
+
+    appendMainLog(roundId, stepKey, 'info', 'Step21.已通过DOM提取即梦结果图+张数=' + collected.length);
+
+    var closeBtn = doc.querySelector('.lv-modal-wrapper .lv-modal-close-icon') || doc.querySelector('.lv-modal-wrapper .icon-close-lrroeF');
+    if (closeBtn) {
+       closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    } else {
+       doc.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+    }
+
+    return { ok: true, images: [] };
+  }
 
   /** RECOVER：在页内轮询直至结果区可观测（结构槽位 / https 槽位 / 完成态文案）或超时，避免 SW 一进来就读空 DOM。 */
   var RECOVER_DOM_READY_TIMEOUT_MS = 45000;
