@@ -73,6 +73,28 @@ const PROFILES = [
     },
   },
   {
+    enginePrefix: 'doubao_agent_seendance',
+    launchCommand: 'DOUBAO_VIDEO_FILL',
+    recoverStrategy: 'PROBE_RELAY',
+    probeCommand: null,
+    relayCommand: null,
+    recoverCommand: null,
+    awaitingRelayPhase: null,
+    parseProbeOutcome: null,
+    registerWatchLoopOnLaunchSuccess: false,
+    startRecoverPageWatcherOnLaunchSuccess: false,
+    injectRecoverPageWatcherAfterProbe: false,
+    keepWatchLoopAfterRelaySuccess: false,
+    defaultSubmitModeForLaunch: null,
+    hasLaunchAnchor() {
+      return false;
+    },
+    mergeLaunchRecoverPayload() {},
+    readProbeOutcome() {
+      return '';
+    },
+  },
+  {
     enginePrefix: 'doubao_agent',
     launchCommand: 'DOUBAO_IMAGE_FILL',
     recoverStrategy: 'PROBE_RELAY',

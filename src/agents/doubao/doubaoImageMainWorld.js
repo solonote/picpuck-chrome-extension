@@ -67,6 +67,27 @@
     return false;
   }
 
+  /** 图像生成面板内「图像 / 视频」切换：点「视频」Tab（不依赖 Radix 动态 id）。 */
+  function clickVideoTabInGenerationWorkbench() {
+    const scoped = Array.from(
+      document.querySelectorAll(
+        '[data-slot="tabs"] button[role="tab"], [data-slot="tabs-list"] button[role="tab"], button[role="tab"][data-slot="tabs-trigger"]',
+      ),
+    );
+    const byText = scoped.find((b) => (b.textContent || '').trim() === '视频');
+    if (byText) {
+      byText.click();
+      return true;
+    }
+    const anyTab = Array.from(document.querySelectorAll('button[role="tab"][data-slot="tabs-trigger"]'));
+    const loose = anyTab.find((b) => (b.textContent || '').trim() === '视频');
+    if (loose) {
+      loose.click();
+      return true;
+    }
+    return false;
+  }
+
   function openRatioMenu() {
     const triggers = Array.from(document.querySelectorAll('button[data-slot="dropdown-menu-trigger"]'));
     const t = triggers.find((b) => (b.textContent || '').includes('比例'));
@@ -130,6 +151,14 @@
         return { ok: false, code: 'DOUBAO_SKILL_NOT_FOUND', detail: '未找到图像生成入口' };
       }
       await sleep(600);
+      return { ok: true };
+    },
+
+    async runStep05b_doubao_click_video_tab() {
+      if (!clickVideoTabInGenerationWorkbench()) {
+        return { ok: false, code: 'DOUBAO_VIDEO_TAB_NOT_FOUND', detail: '未找到「视频」Tab' };
+      }
+      await sleep(500);
       return { ok: true };
     },
 

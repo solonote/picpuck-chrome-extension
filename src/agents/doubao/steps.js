@@ -7,6 +7,11 @@ import { isDoubaoChatUrl } from './doubaoUrls.js';
 
 const DOUBAO_IMAGE_MAIN_WORLD_FILE = 'src/agents/doubao/doubaoImageMainWorld.js';
 
+/** `DOUBAO_VIDEO_FILL` 在比例/粘贴前多一步「视频」Tab，业务步日志序号顺延 1。 */
+function doubaoPostVideoTabNnOffset(ctx) {
+  return ctx.command === 'DOUBAO_VIDEO_FILL' ? 1 : 0;
+}
+
 async function ensureDoubaoMainWorldInjected(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId },
@@ -93,9 +98,21 @@ export async function step06_doubao_click_image_generation(ctx) {
   });
 }
 
-export async function step07_doubao_select_ratio(ctx) {
+/** 豆包视频（Seendance）：进入图像生成后切换到「视频」子 Tab。 */
+export async function step06b_doubao_click_video_tab(ctx) {
   await execDoubaoMainRunner(ctx, {
     nn: 7,
+    stepKey: 'step06b_doubao_click_video_tab',
+    runnerName: 'runStep05b_doubao_click_video_tab',
+    failUserMsg: '动作失败+无法切换到豆包视频',
+    startMsg: '点击视频 Tab',
+    doneMsg: '已切换到视频',
+  });
+}
+
+export async function step07_doubao_select_ratio(ctx) {
+  await execDoubaoMainRunner(ctx, {
+    nn: 7 + doubaoPostVideoTabNnOffset(ctx),
     stepKey: 'step07_doubao_select_ratio',
     runnerName: 'runStep06_doubao_select_ratio',
     failUserMsg: '动作失败+无法选择画幅比例',
@@ -106,7 +123,7 @@ export async function step07_doubao_select_ratio(ctx) {
 
 export async function step08_doubao_paste_images_and_prompt(ctx) {
   await execDoubaoMainRunner(ctx, {
-    nn: 8,
+    nn: 8 + doubaoPostVideoTabNnOffset(ctx),
     stepKey: 'step08_doubao_paste_images_and_prompt',
     runnerName: 'runStep07_doubao_paste_images_and_prompt',
     failUserMsg: '动作失败+无法粘贴参考图或提示词',
@@ -117,7 +134,7 @@ export async function step08_doubao_paste_images_and_prompt(ctx) {
 
 export async function step09_doubao_submit_enter(ctx) {
   await execDoubaoMainRunner(ctx, {
-    nn: 9,
+    nn: 9 + doubaoPostVideoTabNnOffset(ctx),
     stepKey: 'step09_doubao_submit_enter',
     runnerName: 'runStep08_doubao_submit_enter',
     failUserMsg: '动作失败+无法提交生成',
@@ -130,5 +147,5 @@ export async function step09_doubao_submit_enter(ctx) {
 export async function step10_doubao_noop_anchor(ctx) {
   const { tabId, roundId } = ctx;
   const stepKey = 'step10_doubao_noop_anchor';
-  logStepInfo(tabId, roundId, stepKey, 10, '豆包路径不登记异步锚点与回图');
+  logStepInfo(tabId, roundId, stepKey, 10 + doubaoPostVideoTabNnOffset(ctx), '豆包路径不登记异步锚点与回图');
 }
