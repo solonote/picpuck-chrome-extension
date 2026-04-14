@@ -16,9 +16,28 @@
   }
 
   /**
-   * 主会话输入区：优先 **不在** `#input-engine-container` 工作台内的 Slate（当前产品走主对话自然语言，不点技能）。
+   * 豆包主对话多为 Semi Design：`textarea.semi-input-textarea` + placeholder「发消息…」，不是 Slate contenteditable。
+   * 仍回退到主会话区 Slate（若存在且在工作台外）。
    */
+  function findMainChatSemiTextarea() {
+    const host = document.querySelector('#input-engine-container');
+    const list = Array.from(
+      document.querySelectorAll(
+        'textarea[placeholder*="发消息"], textarea.semi-input-textarea, textarea.semi-input-textarea-autosize',
+      ),
+    ).filter((el) => {
+      if (!editorRectUsable(el)) return false;
+      if (host && host.contains(el)) return false;
+      return true;
+    });
+    if (!list.length) return null;
+    list.sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom);
+    return list[0];
+  }
+
   function findComposerEditor() {
+    const ta = findMainChatSemiTextarea();
+    if (ta) return ta;
     const host = document.querySelector('#input-engine-container');
     const candidates = Array.from(
       document.querySelectorAll(
@@ -81,15 +100,36 @@
     return rawLead + body;
   }
 
+  /** Semi / React 受控组件：用原型 setter 写 `value` 再派发自定义事件，避免界面不更新。 */
+  function setNativeFormControlValue(el, value) {
+    const v = typeof value === 'string' ? value : '';
+    const tag = el.tagName;
+    const proto = tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (desc && typeof desc.set === 'function') {
+      desc.set.call(el, v);
+    } else {
+      el.value = v;
+    }
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
   /**
-   * 豆包输入区为 Slate：`appendChild` 裸文本会破坏内部 DOM。
-   * 仅用 `insertText` / 合成 `text/plain` 的 paste。
+   * Slate：`appendChild` 会破坏内部 DOM；用 insertText / 合成 paste。
+   * TEXTAREA/INPUT：整段写入 `value`（本步传入的是完整主对话文案）。
    */
   async function insertPlainTextIntoEditor(ed, text) {
     const s = typeof text === 'string' ? text : '';
     if (!s) return;
     ed.focus();
     await sleep(40);
+    const tag = ed.tagName;
+    if (tag === 'TEXTAREA' || tag === 'INPUT') {
+      setNativeFormControlValue(ed, s);
+      await sleep(120);
+      return;
+    }
     const slateLike = ed.getAttribute && ed.getAttribute('data-slate-editor') === 'true';
     let inserted = false;
     if (typeof document.execCommand === 'function') {
