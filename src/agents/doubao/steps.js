@@ -3,7 +3,7 @@
  */
 import { logStepDone, logStepEnter, logStepFail, logStepInfo } from '../../core/stepLog.js';
 import { DOUBAO_MAIN_INJECT_FAILED, DOUBAO_WORKBENCH_NOT_READY } from './doubaoErrorCodes.js';
-import { DOUBAO_CHAT_HOME, isDoubaoChatUrl, needsNavigateToDoubaoChat } from './doubaoUrls.js';
+import { DOUBAO_CHAT_HOME, isDoubaoChatUrl, isDoubaoSiteUrl, needsNavigateToDoubaoChat } from './doubaoUrls.js';
 
 const DOUBAO_IMAGE_MAIN_WORLD_FILE = 'src/agents/doubao/doubaoImageMainWorld.js';
 
@@ -18,6 +18,53 @@ function doubaoPostVideoTabNnOffset(ctx) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * 本轮指令开始前：若工作 Tab 已在豆包域内则先刷新，避免残留工作台状态干扰自动化。
+ * 非豆包 URL 不刷新（由后续逻辑判错或导航）。
+ */
+async function reloadDoubaoTabBeforeRun(tabId, roundId, stepKey) {
+  let tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    logStepFail(tabId, roundId, stepKey, 4, '动作失败+无法读取豆包标签页', '');
+    throw new Error('DOUBAO_BAD_URL');
+  }
+  const u0 = String(tab.pendingUrl || tab.url || '');
+  if (!isDoubaoSiteUrl(u0)) {
+    return;
+  }
+  logStepInfo(tabId, roundId, stepKey, 4, '执行前刷新豆包页');
+  await new Promise((resolve, reject) => {
+    try {
+      chrome.tabs.reload(tabId, () => {
+        const le = chrome.runtime.lastError;
+        if (le) reject(new Error(String(le.message || 'reload failed')));
+        else resolve(undefined);
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    let t;
+    try {
+      t = await chrome.tabs.get(tabId);
+    } catch {
+      logStepFail(tabId, roundId, stepKey, 4, '动作失败+刷新后无法读取标签页', '');
+      throw new Error('DOUBAO_BAD_URL');
+    }
+    if (t.status === 'complete') {
+      await sleep(400);
+      return;
+    }
+    await sleep(150);
+  }
+  logStepFail(tabId, roundId, stepKey, 4, '动作失败+豆包页刷新后加载超时', '');
+  throw new Error('DOUBAO_RELOAD_TIMEOUT');
 }
 
 /** 导航到 /chat/ 后轮询直至地址就绪或超时 */
@@ -88,6 +135,7 @@ export async function step04_doubao_ensure_chat_home(ctx) {
   const { tabId, roundId } = ctx;
   const stepKey = 'step04_doubao_ensure_chat_home';
   logStepEnter(tabId, roundId, stepKey, 4, '确认当前在豆包对话页');
+  await reloadDoubaoTabBeforeRun(tabId, roundId, stepKey);
   let u = '';
   for (let i = 0; i < 80; i += 1) {
     try {
