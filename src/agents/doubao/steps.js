@@ -7,7 +7,7 @@ import { DOUBAO_CHAT_HOME, isDoubaoChatUrl, needsNavigateToDoubaoChat } from './
 
 const DOUBAO_IMAGE_MAIN_WORLD_FILE = 'src/agents/doubao/doubaoImageMainWorld.js';
 
-/** `DOUBAO_VIDEO_FILL` 在比例/粘贴前多一步「视频」Tab，业务步日志序号顺延 1。 */
+/** `DOUBAO_VIDEO_FILL` 在粘贴前多一步「视频」Tab，其后业务步日志序号顺延 1。 */
 function doubaoPostVideoTabNnOffset(ctx) {
   return ctx.command === 'DOUBAO_VIDEO_FILL' ? 1 : 0;
 }
@@ -165,20 +165,9 @@ export async function step06b_doubao_click_video_tab(ctx) {
   });
 }
 
-export async function step07_doubao_select_ratio(ctx) {
-  await execDoubaoMainRunner(ctx, {
-    nn: 7 + doubaoPostVideoTabNnOffset(ctx),
-    stepKey: 'step07_doubao_select_ratio',
-    runnerName: 'runStep06_doubao_select_ratio',
-    failUserMsg: '动作失败+无法选择画幅比例',
-    startMsg: '选择比例',
-    doneMsg: '比例已选',
-  });
-}
-
 export async function step08_doubao_paste_images_and_prompt(ctx) {
   await execDoubaoMainRunner(ctx, {
-    nn: 8 + doubaoPostVideoTabNnOffset(ctx),
+    nn: 7 + doubaoPostVideoTabNnOffset(ctx),
     stepKey: 'step08_doubao_paste_images_and_prompt',
     runnerName: 'runStep07_doubao_paste_images_and_prompt',
     failUserMsg: '动作失败+无法粘贴参考图或提示词',
@@ -189,7 +178,7 @@ export async function step08_doubao_paste_images_and_prompt(ctx) {
 
 export async function step09_doubao_submit_enter(ctx) {
   await execDoubaoMainRunner(ctx, {
-    nn: 9 + doubaoPostVideoTabNnOffset(ctx),
+    nn: 8 + doubaoPostVideoTabNnOffset(ctx),
     stepKey: 'step09_doubao_submit_enter',
     runnerName: 'runStep08_doubao_submit_enter',
     failUserMsg: '动作失败+无法提交生成',
@@ -202,5 +191,5 @@ export async function step09_doubao_submit_enter(ctx) {
 export async function step10_doubao_noop_anchor(ctx) {
   const { tabId, roundId } = ctx;
   const stepKey = 'step10_doubao_noop_anchor';
-  logStepInfo(tabId, roundId, stepKey, 10 + doubaoPostVideoTabNnOffset(ctx), '豆包路径不登记异步锚点与回图');
+  logStepInfo(tabId, roundId, stepKey, 9 + doubaoPostVideoTabNnOffset(ctx), '豆包路径不登记异步锚点与回图');
 }

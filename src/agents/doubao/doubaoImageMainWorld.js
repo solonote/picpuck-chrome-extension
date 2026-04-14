@@ -67,50 +67,40 @@
     return false;
   }
 
+  /** Tab 文案归一：豆包页内常见空白 / NBSP，避免 trim 后仍不等于「视频」。 */
+  function normalizeWorkbenchTabLabel(el) {
+    return (el.textContent || '')
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   /** 图像生成面板内「图像 / 视频」切换：点「视频」Tab（不依赖 Radix 动态 id）。 */
   function clickVideoTabInGenerationWorkbench() {
-    const scoped = Array.from(
-      document.querySelectorAll(
-        '[data-slot="tabs"] button[role="tab"], [data-slot="tabs-list"] button[role="tab"], button[role="tab"][data-slot="tabs-trigger"]',
-      ),
-    );
-    const byText = scoped.find((b) => (b.textContent || '').trim() === '视频');
-    if (byText) {
-      byText.click();
-      return true;
+    const tabSelectors =
+      '[data-slot="tabs"] button[role="tab"], [data-slot="tabs-list"] button[role="tab"], button[role="tab"][data-slot="tabs-trigger"]';
+    /** 你提供的整页 HTML 中，图像/视频 Tab 位于 `#input-engine-container` 内；先限定范围避免点到页面上其它 role=tab。 */
+    const roots = [];
+    const inputHost = document.querySelector('#input-engine-container');
+    if (inputHost) roots.push(inputHost);
+    roots.push(document);
+
+    for (let r = 0; r < roots.length; r += 1) {
+      const scoped = Array.from(roots[r].querySelectorAll(tabSelectors));
+      const byText = scoped.find((b) => normalizeWorkbenchTabLabel(b) === '视频');
+      if (byText) {
+        byText.click();
+        return true;
+      }
     }
+
     const anyTab = Array.from(document.querySelectorAll('button[role="tab"][data-slot="tabs-trigger"]'));
-    const loose = anyTab.find((b) => (b.textContent || '').trim() === '视频');
+    const loose = anyTab.find((b) => normalizeWorkbenchTabLabel(b) === '视频');
     if (loose) {
       loose.click();
       return true;
     }
     return false;
-  }
-
-  function openRatioMenu() {
-    const triggers = Array.from(document.querySelectorAll('button[data-slot="dropdown-menu-trigger"]'));
-    const t = triggers.find((b) => (b.textContent || '').includes('比例'));
-    if (!t) return false;
-    t.click();
-    return true;
-  }
-
-  function clickRatioMenuItem(ratioLabel) {
-    const want = String(ratioLabel || '')
-      .trim()
-      .replace(/\//g, ':');
-    const compactWant = want.replace(/\s+/g, '');
-    const nodes = Array.from(
-      document.querySelectorAll('[role="menuitem"],[role="option"],[data-slot="dropdown-menu-item"]'),
-    );
-    const m = nodes.find((el) => {
-      const tx = (el.textContent || '').replace(/\s+/g, '');
-      return tx.includes(compactWant) || tx.includes(want.replace(':', ''));
-    });
-    if (!m) return false;
-    m.click();
-    return true;
   }
 
   async function insertPlainTextIntoEditor(ed, text) {
@@ -160,20 +150,6 @@
         return { ok: false, code: 'DOUBAO_VIDEO_TAB_NOT_FOUND', detail: '未找到「视频」Tab' };
       }
       await sleep(500);
-      return { ok: true };
-    },
-
-    async runStep06_doubao_select_ratio(payload) {
-      const raw = payload && payload.ratio != null ? String(payload.ratio).trim() : '16:9';
-      const label = raw.replace(/\//g, ':');
-      if (!openRatioMenu()) {
-        return { ok: false, code: 'DOUBAO_RATIO_MENU_FAILED', detail: '未找到比例下拉' };
-      }
-      await sleep(450);
-      if (!clickRatioMenuItem(label)) {
-        return { ok: false, code: 'DOUBAO_RATIO_MENU_FAILED', detail: '未匹配比例菜单项: ' + label };
-      }
-      await sleep(450);
       return { ok: true };
     },
 
