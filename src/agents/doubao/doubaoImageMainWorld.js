@@ -155,6 +155,7 @@
     },
 
     async runStep05b_doubao_click_video_tab() {
+      await sleep(900);
       if (!clickVideoTabInGenerationWorkbench()) {
         return { ok: false, code: 'DOUBAO_VIDEO_TAB_NOT_FOUND', detail: '未找到「视频」Tab' };
       }
