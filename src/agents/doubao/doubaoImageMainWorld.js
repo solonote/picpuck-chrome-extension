@@ -138,19 +138,44 @@
     return false;
   }
 
+  /**
+   * 豆包输入区为 Slate：`appendChild` 裸文本会破坏内部 DOM，选区落在非 Slate 节点上即报
+   * `Cannot resolve a Slate node from DOM node`（常见为 HTMLSpanElement）。
+   * 仅用 `insertText` / 合成 `text/plain` 的 paste，与 Slate 更新路径对齐。
+   */
   async function insertPlainTextIntoEditor(ed, text) {
-    ed.focus();
     const s = typeof text === 'string' ? text : '';
-    try {
-      if (document.execCommand) {
-        document.execCommand('insertText', false, s);
-      } else {
-        ed.appendChild(document.createTextNode(s));
+    if (!s) return;
+    ed.focus();
+    await sleep(40);
+    const slateLike = ed.getAttribute && ed.getAttribute('data-slate-editor') === 'true';
+    let inserted = false;
+    if (typeof document.execCommand === 'function') {
+      try {
+        inserted = document.execCommand('insertText', false, s) === true;
+      } catch {
+        inserted = false;
       }
-    } catch {
-      ed.appendChild(document.createTextNode(s));
     }
-    await sleep(200);
+    if (!inserted) {
+      try {
+        const dt = new DataTransfer();
+        dt.setData('text/plain', s);
+        ed.dispatchEvent(
+          new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }),
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!slateLike && typeof document.execCommand !== 'function' && ed.appendChild) {
+      try {
+        ed.appendChild(document.createTextNode(s));
+      } catch {
+        /* ignore */
+      }
+    }
+    await sleep(220);
   }
 
   function dispatchEnterOnEditor(ed) {
