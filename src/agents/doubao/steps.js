@@ -7,6 +7,10 @@ import { DOUBAO_CHAT_HOME, isDoubaoChatUrl, needsNavigateToDoubaoChat } from './
 
 const DOUBAO_IMAGE_MAIN_WORLD_FILE = 'src/agents/doubao/doubaoImageMainWorld.js';
 
+function payloadFillOnly(payload) {
+  return !!(payload && typeof payload === 'object' && payload.fillOnly);
+}
+
 /** `DOUBAO_VIDEO_FILL` 在粘贴前多一步「视频」Tab，其后业务步日志序号顺延 1。 */
 function doubaoPostVideoTabNnOffset(ctx) {
   return ctx.command === 'DOUBAO_VIDEO_FILL' ? 1 : 0;
@@ -177,9 +181,17 @@ export async function step08_doubao_paste_images_and_prompt(ctx) {
 }
 
 export async function step09_doubao_submit_enter(ctx) {
+  const { tabId, roundId, command, payload } = ctx;
+  const stepKey = 'step09_doubao_submit_enter';
+  const nn = 8 + doubaoPostVideoTabNnOffset(ctx);
+  // 豆包视频：默认只填词贴图，由用户在页内点生成；与 Gemini `step11_gemini_submit_enter_if_needed` 的 fillOnly 语义对齐。
+  if (command === 'DOUBAO_VIDEO_FILL' && payloadFillOnly(payload) && !payload.furnaceDirectSubmit) {
+    logStepInfo(tabId, roundId, stepKey, nn, '豆包视频填词模式跳过 Enter，请在页内确认生成');
+    return;
+  }
   await execDoubaoMainRunner(ctx, {
-    nn: 8 + doubaoPostVideoTabNnOffset(ctx),
-    stepKey: 'step09_doubao_submit_enter',
+    nn,
+    stepKey,
     runnerName: 'runStep08_doubao_submit_enter',
     failUserMsg: '动作失败+无法提交生成',
     startMsg: '在输入区派发 Enter 提交',
