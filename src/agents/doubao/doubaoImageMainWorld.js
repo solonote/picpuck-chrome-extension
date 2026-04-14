@@ -9,12 +9,29 @@
     return new Promise((r) => setTimeout(r, ms));
   }
 
+  function editorRectUsable(el) {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 4 && r.height > 4;
+  }
+
+  /**
+   * 工作台打开后，页内往往同时存在「主对话」与「图像/视频生成」两处 contenteditable；
+   * 必须优先 `#input-engine-container` 内的输入区，否则词会写进错误 Slate，随后被工作台状态清掉（表现为填完瞬间消失）。
+   */
   function findComposerEditor() {
-    return (
-      document.querySelector('[data-slate-editor="true"][role="textbox"][contenteditable="true"]') ||
-      document.querySelector('[role="textbox"][contenteditable="true"][data-slate-editor="true"]') ||
-      document.querySelector('[role="textbox"][contenteditable="true"]')
-    );
+    const host = document.querySelector('#input-engine-container');
+    const candidates = Array.from(
+      document.querySelectorAll(
+        '[data-slate-editor="true"][role="textbox"][contenteditable="true"], [role="textbox"][contenteditable="true"]',
+      ),
+    ).filter(editorRectUsable);
+    if (host) {
+      const inner = candidates.find((el) => host.contains(el));
+      if (inner) return inner;
+    }
+    const slate = candidates.find((el) => el.getAttribute('data-slate-editor') === 'true');
+    return slate || candidates[0] || null;
   }
 
   async function dataUrlToBlob(dataUrl) {
@@ -172,15 +189,20 @@
     },
 
     async runStep07_doubao_paste_images_and_prompt(payload) {
-      const ed = findComposerEditor();
+      let ed = findComposerEditor();
       if (!ed) {
         return { ok: false, code: 'DOUBAO_EDITOR_NOT_FOUND', detail: '未找到对话输入框' };
       }
       const images = Array.isArray(payload.images) ? payload.images.filter((x) => typeof x === 'string' && x) : [];
       for (let i = 0; i < images.length; i += 1) {
+        ed = findComposerEditor() || ed;
         await pasteImageDataUrlIntoEditor(ed, images[i]);
       }
       const prompt = typeof payload.prompt === 'string' ? payload.prompt : '';
+      ed = findComposerEditor() || ed;
+      if (!ed) {
+        return { ok: false, code: 'DOUBAO_EDITOR_NOT_FOUND', detail: '贴图后未找到输入框' };
+      }
       await insertPlainTextIntoEditor(ed, prompt);
       return { ok: true };
     },
