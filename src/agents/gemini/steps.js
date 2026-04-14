@@ -408,11 +408,11 @@ export async function step10_gemini_confirm_prompt_applied(ctx) {
   logStepInfo(tabId, roundId, stepKey, 10, '填词与贴图步骤已执行完毕');
 }
 
-/** fillOnly 时跳过：否则在输入区派发 Enter 提交（仅主 frame：allFrames 时子 frame 会拖满 executeScript 整轮 Promise） */
+/** 纯 fillOnly 时跳过；熔炉「填入并提交」会带 `furnaceDirectSubmit` 仍走 Enter。 */
 export async function step11_gemini_submit_enter_if_needed(ctx) {
   const { tabId, roundId, payload } = ctx;
   const stepKey = 'step11_gemini_submit_enter_if_needed';
-  if (payloadFillOnly(payload)) {
+  if (payloadFillOnly(payload) && !payload.furnaceDirectSubmit) {
     logStepInfo(tabId, roundId, stepKey, 11, '填词仅模式跳过在输入区按 Enter 提交');
     return;
   }

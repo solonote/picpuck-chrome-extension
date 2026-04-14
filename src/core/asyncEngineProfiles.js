@@ -73,6 +73,28 @@ const PROFILES = [
     },
   },
   {
+    enginePrefix: 'doubao_agent',
+    launchCommand: 'DOUBAO_IMAGE_FILL',
+    recoverStrategy: 'PROBE_RELAY',
+    probeCommand: null,
+    relayCommand: null,
+    recoverCommand: null,
+    awaitingRelayPhase: null,
+    parseProbeOutcome: null,
+    registerWatchLoopOnLaunchSuccess: false,
+    startRecoverPageWatcherOnLaunchSuccess: false,
+    injectRecoverPageWatcherAfterProbe: false,
+    keepWatchLoopAfterRelaySuccess: false,
+    defaultSubmitModeForLaunch: null,
+    hasLaunchAnchor() {
+      return false;
+    },
+    mergeLaunchRecoverPayload() {},
+    readProbeOutcome() {
+      return '';
+    },
+  },
+  {
     enginePrefix: 'gemini_agent',
     launchCommand: 'GEMINI_ASYNC_LAUNCH',
     recoverStrategy: 'PROBE_RELAY',

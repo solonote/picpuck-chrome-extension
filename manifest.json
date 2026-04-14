@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PicPuck",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "PicPuck 编排：即梦 / Gemini 等站点 Agent（按设计文档分层实现）",
   "icons": {
     "16": "icons/icon-16.png",
@@ -27,6 +27,7 @@
       "matches": [
         "https://jimeng.jianying.com/*",
         "https://gemini.google.com/*",
+        "https://www.doubao.com/*",
         "https://picpuck.com/*",
         "https://www.picpuck.com/*",
         "http://localhost/*",
@@ -40,6 +41,7 @@
   "host_permissions": [
     "https://jimeng.jianying.com/*",
     "https://gemini.google.com/*",
+    "https://www.doubao.com/*",
     "https://picpuck.com/*",
     "https://www.picpuck.com/*",
     "http://localhost/*",
@@ -51,11 +53,13 @@
         "src/core/injectHelpersMainWorld.js",
         "src/agents/jimeng/jimengImageMainWorld.js",
         "src/agents/gemini/geminiImageMainWorld.js",
+        "src/agents/doubao/doubaoImageMainWorld.js",
         "src/core/picpuckFetchCaptureMainWorld.js"
       ],
       "matches": [
         "https://jimeng.jianying.com/*",
         "https://gemini.google.com/*",
+        "https://www.doubao.com/*",
         "https://picpuck.com/*",
         "https://www.picpuck.com/*",
         "http://localhost/*",
