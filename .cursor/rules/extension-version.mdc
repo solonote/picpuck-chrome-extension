@@ -1,0 +1,10 @@
+---
+description: PicPuck 扩展发版时须与 mcup-ai 熔炉常量同步版本号
+alwaysApply: true
+---
+
+# 扩展版本与熔炉同步
+
+修改 **`manifest.json` 的 `version`** 发版时，**必须**在 **`mcup-ai`** 仓库同步修改 **`frontend-v2/src/utils/chromeExtension.js`** 中的 **`EXPECTED_EXTENSION_VERSION`**（与 manifest **完全一致**）。安装页下载名、扩展 ping 版本校验、`PICPUCK_EXTENSION_ZIP_*` 均由该常量派生；**勿**在熔炉其它文件手写 `v1.0.x` 或 zip 文件名。
+
+CI 在 `mcup-ai` 的 **`scripts/ci-chrome-extension-package.sh`** 会按 manifest 生成 **`picpuck-chrome-extension-v{version}.zip`**；两仓 push 后由 CI 重打 zip。
