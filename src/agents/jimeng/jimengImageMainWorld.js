@@ -885,7 +885,7 @@
     var wantRes =
       payload && payload.resolutionLabel && String(payload.resolutionLabel).trim()
         ? String(payload.resolutionLabel).trim()
-        : '超清 4K';
+        : '高清 2K';
     var params = getCurrentParams();
     var needRatio = wantRatio && params.ratio.indexOf(wantRatio) === -1;
     var needRes = wantRes && params.resolution.indexOf(wantRes) === -1;
