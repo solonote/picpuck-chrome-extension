@@ -776,16 +776,25 @@
     var stepKey = 'step11_jimeng_video_ensure_ratio';
     var wantRatio = payload && payload.jimengVideoRatio && String(payload.jimengVideoRatio).trim() ? String(payload.jimengVideoRatio).trim() : '16:9';
     
+    // 比例按钮文案常为「16:9」后紧跟分辨率（如 720P），innerText 不再是整段 ^\d+:\d+$，取首行或串首的比例片段即可。
+    function readToolbarRatioFromButton(btn) {
+      var raw = (btn.innerText || btn.textContent || '').trim();
+      if (!raw) return '';
+      var head = raw.split(/\r?\n/)[0].trim();
+      var m = head.match(/^(\d+:\d+)/) || raw.match(/^(\d+:\d+)/);
+      return m ? m[1] : '';
+    }
     // Check if the current button already shows the desired ratio
     var ratioBtns = doc.querySelectorAll('button.toolbar-button-mCaZcW, button[class*="toolbar-button-"]');
     var ratioBtn = null;
     for (var k = 0; k < ratioBtns.length; k++) {
-      var txt = (ratioBtns[k].innerText || '').trim();
-      if (txt.match(/^\d+:\d+$/)) {
-        ratioBtn = ratioBtns[k];
-        if (txt === wantRatio) return { ok: true };
-        break;
-      }
+      var cand = ratioBtns[k];
+      if (!cand || !cand.offsetParent) continue;
+      var ratioPart = readToolbarRatioFromButton(cand);
+      if (!ratioPart) continue;
+      ratioBtn = cand;
+      if (ratioPart === wantRatio) return { ok: true };
+      break;
     }
     
     if (!ratioBtn) {
