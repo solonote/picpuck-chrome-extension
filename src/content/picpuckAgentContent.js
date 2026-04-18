@@ -1,6 +1,6 @@
 /* global chrome */
 /**
- * 内容脚本（隔离世界）：在即梦/Gemini/豆包 **且 Tab 位于 PicPuck 专用窗内**时注入顶栏 `#picpuck-agent-topbar`；本站（如 localhost）仅作 postMessage→SW 桥，不显示顶栏。
+ * 内容脚本（隔离世界）：在即梦/Gemini **且 Tab 位于 PicPuck 专用窗内**时注入顶栏 `#picpuck-agent-topbar`；本站（如 localhost）仅作 postMessage→SW 桥，不显示顶栏。
  *
  * - §4.1：左黑框「当前轮次」+ 三连击复制日志；中：机器人 SVG + 主文案 + `STEP NN //` 与动作摘要；右：最后一条 info 摘要；执行中全视口霓虹边（pointer-events 不挡页面）
  * - §4.2：600ms 内三次点击左侧 → 向 SW 索取日志 JSON 并写入剪贴板（含 session 快照，避免 SW 休眠丢日志）
@@ -92,14 +92,13 @@
   }
 
   /**
-   * 顶栏目标站点（即梦 / Gemini / 豆包）；是否与 PicPuck 专用窗一致由 `shouldShowWorkspaceTopbar`（SW：`isTabInPicpuckWorkspaceWindow`）判定。
+   * 顶栏目标站点（即梦 / Gemini）；是否与 PicPuck 专用窗一致由 `shouldShowWorkspaceTopbar`（SW：`isTabInPicpuckWorkspaceWindow`）判定。
    */
   function isWorkspaceSiteHost() {
     try {
       const h = String(location.hostname || '').toLowerCase();
       if (h === 'gemini.google.com') return true;
       if (h === 'jimeng.jianying.com' || h.endsWith('.jimeng.jianying.com')) return true;
-      if (h === 'www.doubao.com' || h === 'doubao.com') return true;
       return false;
     } catch {
       return false;

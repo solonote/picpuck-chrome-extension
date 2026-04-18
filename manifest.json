@@ -27,7 +27,6 @@
       "matches": [
         "https://jimeng.jianying.com/*",
         "https://gemini.google.com/*",
-        "https://www.doubao.com/*",
         "https://picpuck.com/*",
         "https://www.picpuck.com/*",
         "http://localhost/*",
@@ -41,7 +40,6 @@
   "host_permissions": [
     "https://jimeng.jianying.com/*",
     "https://gemini.google.com/*",
-    "https://www.doubao.com/*",
     "https://picpuck.com/*",
     "https://www.picpuck.com/*",
     "http://localhost/*",
@@ -53,13 +51,11 @@
         "src/core/injectHelpersMainWorld.js",
         "src/agents/jimeng/jimengImageMainWorld.js",
         "src/agents/gemini/geminiImageMainWorld.js",
-        "src/agents/doubao/doubaoImageMainWorld.js",
         "src/core/picpuckFetchCaptureMainWorld.js"
       ],
       "matches": [
         "https://jimeng.jianying.com/*",
         "https://gemini.google.com/*",
-        "https://www.doubao.com/*",
         "https://picpuck.com/*",
         "https://www.picpuck.com/*",
         "http://localhost/*",
