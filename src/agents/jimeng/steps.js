@@ -13,7 +13,12 @@ import {
   JIMENG_SUBMIT_MODE_INVALID,
   JIMENG_WORKBENCH_NOT_READY,
 } from './jimengErrorCodes.js';
-import { JIMENG_AI_TOOL_HOME, isJimengAiToolHomeUrl } from './jimengUrls.js';
+import {
+  JIMENG_AI_TOOL_HOME,
+  XIAOYUNQUE_HOME,
+  isJimengAiToolHomeUrl,
+  isXiaoyunqueHomeUrl,
+} from './jimengUrls.js';
 
 /** 设计 §3.1.1：与 `manifest.json` `web_accessible_resources` 路径一致 */
 const JIMENG_IMAGE_MAIN_WORLD_FILE = 'src/agents/jimeng/jimengImageMainWorld.js';
@@ -22,6 +27,11 @@ function payloadString(payload, key) {
   if (!payload || typeof payload !== 'object') return '';
   const v = payload[key];
   return typeof v === 'string' ? v : '';
+}
+
+function isXiaoyunqueVideoEngine(payload) {
+  const core = payloadString(payload, 'core_engine').toLowerCase();
+  return core.indexOf('xiaoyunque') !== -1;
 }
 
 /** 熔炉传 `ratio`（如 9/16）时映射为即梦 radio 的 value（9:16）；显式 `ratioLabel` 优先 */
@@ -311,14 +321,29 @@ export async function step04_jimeng_require_logged_in(ctx) {
  * 已登录：若不在 `ai-tool/generate` 则整页导航至任务起始页，加载完成后滚至页底（懒加载后再滚一次）；已在该页则仅滚底。
  */
 export async function step05_jimeng_ensure_ai_tool_home(ctx) {
-  const { tabId, roundId } = ctx;
+  const { tabId, roundId, payload } = ctx;
   const stepKey = 'step05_jimeng_ensure_ai_tool_home';
-  logStepEnter(tabId, roundId, stepKey, 5, '确认在即梦站点并进入 AI 生成起始页');
+  const useXiaoyunque = isXiaoyunqueVideoEngine(payload);
+  const targetHost = useXiaoyunque ? 'xyq.jianying.com' : 'jimeng.jianying.com';
+  const targetHome = useXiaoyunque ? XIAOYUNQUE_HOME : JIMENG_AI_TOOL_HOME;
+  logStepEnter(
+    tabId,
+    roundId,
+    stepKey,
+    5,
+    useXiaoyunque ? '确认在小云雀站点并进入视频工作台首页' : '确认在即梦站点并进入 AI 生成起始页',
+  );
 
   const tab = await chrome.tabs.get(tabId);
   const url = tab.url || '';
-  if (url.indexOf('jimeng.jianying.com') === -1) {
-    logStepInfo(tabId, roundId, stepKey, 5, '动作失败+当前标签页不是即梦站点');
+  if (url.indexOf(targetHost) === -1) {
+    logStepInfo(
+      tabId,
+      roundId,
+      stepKey,
+      5,
+      useXiaoyunque ? '动作失败+当前标签页不是小云雀站点' : '动作失败+当前标签页不是即梦站点',
+    );
     throw new Error('JIMENG_NOT_JIMENG_TAB');
   }
 
@@ -344,22 +369,38 @@ export async function step05_jimeng_ensure_ai_tool_home(ctx) {
     });
   }
 
-  if (isJimengAiToolHomeUrl(url)) {
-    logStepInfo(tabId, roundId, stepKey, 5, '已在生成起始页将页面滚至底部');
+  const onTargetHome = useXiaoyunque ? isXiaoyunqueHomeUrl(url) : isJimengAiToolHomeUrl(url);
+  if (onTargetHome) {
+    logStepInfo(
+      tabId,
+      roundId,
+      stepKey,
+      5,
+      useXiaoyunque ? '已在小云雀首页将页面滚至底部' : '已在生成起始页将页面滚至底部',
+    );
     await scrollGeneratePageToBottom();
     await pushRoundPhaseUi(tabId, roundId);
     logStepDone(tabId, roundId, stepKey, 5, '生成起始页就绪');
     return;
   }
 
-  logStepInfo(tabId, roundId, stepKey, 5, '正在导航至即梦生成起始页');
+  logStepInfo(
+    tabId,
+    roundId,
+    stepKey,
+    5,
+    useXiaoyunque ? '正在导航至小云雀首页' : '正在导航至即梦生成起始页',
+  );
 
   try {
-    await chrome.tabs.update(tabId, { url: JIMENG_AI_TOOL_HOME });
+    await chrome.tabs.update(tabId, { url: targetHome });
     await waitForTabUrlWhen(
       tabId,
       45000,
-      (u) => u.indexOf('jimeng.jianying.com') !== -1 && isJimengAiToolHomeUrl(u),
+      (u) => {
+        if (u.indexOf(targetHost) === -1) return false;
+        return useXiaoyunque ? isXiaoyunqueHomeUrl(u) : isJimengAiToolHomeUrl(u);
+      },
       'JIMENG_HOME_NAV_TIMEOUT',
     );
   } catch (e) {
@@ -369,7 +410,7 @@ export async function step05_jimeng_ensure_ai_tool_home(ctx) {
       roundId,
       stepKey,
       5,
-      '动作失败+无法打开即梦生成起始页请稍后重试',
+      useXiaoyunque ? '动作失败+无法打开小云雀首页请稍后重试' : '动作失败+无法打开即梦生成起始页请稍后重试',
       m.slice(0, 500),
     );
     throw e;
@@ -428,14 +469,16 @@ export async function step09_jimeng_ensure_mode_image_generation(ctx) {
 
 /** 视频模式：类型选择器切「视频生成」 */
 export async function step09_jimeng_video_ensure_mode_video_generation(ctx) {
+  const { payload } = ctx;
+  const useXiaoyunque = isXiaoyunqueVideoEngine(payload);
   await execJimengMainRunner(ctx, {
     nn: 9,
     stepKey: 'step09_jimeng_video_ensure_mode_video_generation',
     runnerName: 'runStep09VideoEnsureModeVideoGeneration',
-    mainPayload: {},
-    failUserMsg: '动作失败+无法切换到视频生成模式',
-    startMsg: '将生成类型切换为「视频生成」',
-    doneMsg: '已处于视频生成模式',
+    mainPayload: { xiaoyunqueMode: useXiaoyunque ? 'long_video_2' : '' },
+    failUserMsg: useXiaoyunque ? '动作失败+无法切换到智能长视频 2.0 模式' : '动作失败+无法切换到视频生成模式',
+    startMsg: useXiaoyunque ? '切换到小云雀「智能长视频 2.0」模式' : '将生成类型切换为「视频生成」',
+    doneMsg: useXiaoyunque ? '已切换到智能长视频 2.0 模式' : '已处于视频生成模式',
   });
 }
 
@@ -471,12 +514,14 @@ export async function step10_jimeng_ensure_model(ctx) {
 /** 视频模式：选择指定模型 */
 export async function step10_jimeng_video_ensure_model(ctx) {
   const { payload } = ctx;
+  const useXiaoyunque = isXiaoyunqueVideoEngine(payload);
   await execJimengMainRunner(ctx, {
     nn: 10,
     stepKey: 'step10_jimeng_video_ensure_model',
     runnerName: 'runStep10VideoEnsureModel',
     mainPayload: {
       jimengVideoModel: payloadString(payload, 'jimengVideoModel'),
+      xiaoyunqueMode: useXiaoyunque ? 'long_video_2' : '',
     },
     failUserMsg: '动作失败+无法选择即梦视频模型',
     startMsg: '选择请求指定的视频模型',
