@@ -1,16 +1,12 @@
 /**
- * 即梦图片生成：MAIN 世界业务脚本（设计 §3.1.1）。
- * 由 SW `executeScript` `files` 注入；通过 `postMessage` 写日志（§3.2）。
- * 源语义对齐旧版 `runJimengGenerateImage`（不含 Banner / 三连击日志，R6 排除）。
+ * 小云雀视频（xyq.jianying.com）：MAIN 世界业务脚本。
+ * 与即梦 `jimengImageMainWorld.js` 完全分离；由 SW `executeScript` 注入；通过 `postMessage` 写日志。
  *
- * DOM：禁止写死 CSS Modules 哈希类名（如 label-l6Zq3t、button-text-xxxxx）。优先稳定文案、role、data-*；
- * 若用 class 子串，仅用可预期的语义前缀（如 commercial-content、toolbar-button、lv-select-view-value）。
+ * DOM：禁止写死 CSS Modules 哈希类名。优先稳定文案、role、data-*；若用 class 子串，仅用可预期的语义前缀。
  */
 (function () {
   var g = typeof globalThis !== 'undefined' ? globalThis : window;
-  // 同页可能多次注入：LAUNCH 已创建 __picpuckJimengImage 后，仅当已含 watcher API 才跳过；
-  // 否则须重新跑完整 bundle（例如扩展升级后旧页内对象缺 startJimengRecoverPageWatcher）。
-  if (g.__picpuckJimengImage && typeof g.__picpuckJimengImage.startJimengRecoverPageWatcher === 'function') {
+  if (g.__picpuckXiaoyunqueVideo && typeof g.__picpuckXiaoyunqueVideo.runStep07EnsureWorkbenchReady === 'function') {
     return;
   }
 
@@ -48,7 +44,15 @@
     return null;
   }
 
-  function findJimengPromptField() {
+  function isPicpuckXyqSite() {
+    try {
+      return String(location.hostname || '') === 'xyq.jianying.com';
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function findXiaoyunqueVideoPromptField() {
     var list = doc.querySelectorAll('[class*="prompt-editor-container"] .tiptap.ProseMirror[contenteditable="true"]');
     var i;
     var el;
@@ -70,10 +74,81 @@
     return null;
   }
 
+  /**
+   * 小云雀视频主输入：以 `promptContainer-*` 为壳（与即梦 `prompt-editor-container` 分离），内层 `tiptap ProseMirror`。
+   * `data-placeholder` 在子节点 p 上，故不再强依赖 textarea placeholder。
+   */
+  function findXiaoyunqueVideoPromptField() {
+    var i;
+    var el;
+    var shell = doc.querySelector('[class*="promptContainer"]');
+    if (shell) {
+      el = shell.querySelector('.tiptap.ProseMirror[contenteditable="true"]');
+      if (el && el.offsetParent) return el;
+    }
+    var list = doc.querySelectorAll('.tiptap.ProseMirror[contenteditable="true"]');
+    for (i = 0; i < list.length; i++) {
+      el = list[i];
+      if (!el || !el.offsetParent) continue;
+      if (el.closest && el.closest('[class*="prompt-editor-sizer"]')) continue;
+      if (el.closest && (el.closest('nav') || el.closest('[class*="headerRight"]'))) continue;
+      return el;
+    }
+    var pm = doc.querySelectorAll('[contenteditable="true"][role="textbox"]');
+    for (i = 0; i < pm.length; i++) {
+      el = pm[i];
+      if (!el || !el.offsetParent) continue;
+      if (el.closest && el.closest('[class*="prompt-editor-sizer"]')) continue;
+      if (el.closest && (el.closest('nav') || el.closest('[class*="headerRight"]'))) continue;
+      return el;
+    }
+    var tas = doc.querySelectorAll('textarea');
+    for (i = 0; i < tas.length; i++) {
+      var ta = tas[i];
+      if (!ta || !ta.offsetParent) continue;
+      var ph = (ta.getAttribute('placeholder') || '').trim();
+      if (ph && /描述|创意|提示|故事|画面|脚本|输入/i.test(ph)) return ta;
+    }
+    return null;
+  }
+
+  /**
+   * 小云雀参数条：常见为 `toolbar-*` + `buttonContainer-*` + `lv-btn`，**未必**有即梦那套 `lv-select` / `toolbar-button-*`。
+   */
+  function xiaoyunqueWorkbenchChromePresent(container) {
+    if (!container || !container.offsetParent) return false;
+    if (container.querySelector('[class*="lv-select"]')) return true;
+    if (container.querySelector('[class*="toolbar-"]')) return true;
+    if (container.querySelector('[class*="buttonContainer"]')) return true;
+    if (container.querySelector('[class*="createButton"]')) return true;
+    if (container.querySelector('button.lv-btn')) return true;
+    return false;
+  }
+
+  function hasXiaoyunqueVideoWorkbenchForm() {
+    var shell = doc.querySelector('[class*="promptContainer"]');
+    if (!shell || !shell.offsetParent) return false;
+    var pe = shell.querySelector('.tiptap.ProseMirror[contenteditable="true"]');
+    if (!pe || !pe.offsetParent) return false;
+    return xiaoyunqueWorkbenchChromePresent(shell);
+  }
+
   function hasForm() {
-    var pe = findJimengPromptField();
+    var pe = findXiaoyunqueVideoPromptField();
     var anySelect = doc.querySelector('[class*="lv-select-view"]') || doc.querySelector('[class*="lv-select"]');
     return !!(pe && anySelect);
+  }
+
+  function tryFocusXyqPrimaryPrompt() {
+    var pe = findXiaoyunqueVideoPromptField();
+    if (!pe) return false;
+    try {
+      if (pe.focus) pe.focus();
+      if (pe.click) pe.click();
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   function hasOpenPopover() {
@@ -246,7 +321,7 @@
     }
     var ta = doc.querySelector('textarea[class*="lv-textarea"], [class*="prompt-container"] textarea');
     if (ta) ta.click();
-    var pe = findJimengPromptField();
+    var pe = findXiaoyunqueVideoPromptField();
     if (pe && pe.click) pe.click();
   }
 
@@ -305,7 +380,7 @@
       paramBtn.click();
       return;
     }
-    var ta = findJimengPromptField();
+    var ta = findXiaoyunqueVideoPromptField();
     if (ta && ta.offsetParent) {
       ta.focus();
       if (ta.click) ta.click();
@@ -499,27 +574,17 @@
   async function runStep07EnsureWorkbenchReady(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step07_jimeng_ensure_workbench_ready';
-    var step0Max = 8;
+    var step0Max = 15;
     var step0Retries = 0;
-    while (!hasForm()) {
+    while (!hasXiaoyunqueVideoWorkbenchForm()) {
       if (step0Retries >= step0Max) {
-        appendMainLog(roundId, stepKey, 'debug', 'Step07.debug.workbenchMaxRetries=' + step0Max);
-        return { ok: false, code: 'JIMENG_WORKBENCH_NOT_READY' };
+        appendMainLog(roundId, stepKey, 'debug', 'Step07.debug.workbenchMaxRetries=' + step0Max + ' xyq=1');
+        return { ok: false, code: 'XIAOYUNQUE_WORKBENCH_NOT_READY' };
       }
       step0Retries++;
-      var clicked = clickImageGenerationCard();
-      appendMainLog(roundId, stepKey, 'debug', 'Step07.debug.retry=' + step0Retries + ' clickCard=' + clicked);
-      if (clicked) {
-        await delay(2500);
-        continue;
-      }
-      findFormAndOpen();
-      if (step0Retries === 3 || step0Retries === 6) {
-        var homeOk = clickJimengHomeInspiration();
-        appendMainLog(roundId, stepKey, 'debug', 'Step07.debug.clickHome=' + homeOk + ' retry=' + step0Retries);
-      }
-      var waitAfter = step0Retries === 3 || step0Retries === 6 ? 2200 : 1000;
-      await delay(waitAfter);
+      tryFocusXyqPrimaryPrompt();
+      appendMainLog(roundId, stepKey, 'debug', 'Step07.debug.xyqWaitWorkbench retry=' + step0Retries);
+      await delay(1400);
     }
     return { ok: true };
   }
@@ -602,32 +667,229 @@
 
   /** @param {{ roundId: string }} payload */
   async function runStep09VideoEnsureModeVideoGeneration(payload) {
+    return runStep09VideoEnsureModeXiaoyunqueLongVideo(payload);
+  }
+
+  /** 小云雀：点击「视频 2.0 / Agent 模式」触发器后，选择「智能长视频 2.0」（仅做这一段切换）；已选芯片含该文案则跳过。 */
+  async function runStep09VideoEnsureModeXiaoyunqueLongVideo(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step09_jimeng_video_ensure_mode_video_generation';
-    var step34Max = 3;
-    var modeRetries = 0;
+    var retries = 0;
+
+    function isVisible(el) {
+      if (!el) return false;
+      var st = window.getComputedStyle ? window.getComputedStyle(el) : null;
+      if (st && (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0')) return false;
+      return !!(el.offsetParent || (el.getClientRects && el.getClientRects().length));
+    }
+
+    function textNorm(s) {
+      return String(s || '').replace(/\s+/g, '').trim();
+    }
+
+    function findByTextContainsNormalized(root, text, tag) {
+      var want = textNorm(text);
+      var list = (root || doc).querySelectorAll(tag || '*');
+      for (var i = 0; i < list.length; i++) {
+        var el = list[i];
+        if (!isVisible(el)) continue;
+        var got = textNorm(el.textContent || '');
+        if (!got) continue;
+        if (got.indexOf(want) !== -1) return el;
+      }
+      return null;
+    }
+
+    /** 小云雀新版：模式入口在 triggerButton / selectedTag 上，不能只 closest 到巨大 div 否则 click 不弹层 */
+    function findModeTriggerVideo20() {
+      var labs = doc.querySelectorAll('[class*="triggerLabel"], [class*="tagLabel"]');
+      var i;
+      var lab;
+      var tn;
+      var host;
+      for (i = 0; i < labs.length; i++) {
+        lab = labs[i];
+        if (!isVisible(lab)) continue;
+        tn = textNorm(lab.textContent || '');
+        if (tn.indexOf('Agent模式') === -1 && tn.indexOf('视频2.0') === -1 && tn.indexOf('视频20') === -1) continue;
+        host = lab.closest('[class*="triggerButton"]');
+        if (host && isVisible(host)) return host;
+        host = lab.closest('[class*="selectedTag"]');
+        if (host && isVisible(host)) return host;
+      }
+      var label =
+        findByTextContainsNormalized(doc.body, '视频2.0', 'span,div,button') ||
+        findByTextContainsNormalized(doc.body, 'Agent模式', 'span,div,button');
+      if (!label) return null;
+      host = label.closest('[class*="triggerButton"]') || label.closest('[class*="selectedTag"]');
+      if (host && isVisible(host)) return host;
+      var clickable = label.closest ? label.closest('button,[role="button"],div') : null;
+      if (!clickable || !isVisible(clickable)) return label;
+      return clickable;
+    }
+
+    /** 已选模式条（如 selectedTag）里已是「智能长视频 2.0」则无需再点开下拉 */
+    function isAlreadyLongVideo20InSelectedChips() {
+      var chips = doc.querySelectorAll('[class*="selectedTag"]');
+      var i;
+      for (i = 0; i < chips.length; i++) {
+        var el = chips[i];
+        if (!isVisible(el)) continue;
+        var got = textNorm(el.textContent || '');
+        if (got.indexOf('智能长视频2.0') !== -1) return true;
+      }
+      return false;
+    }
+
+    function matchesLongVideoMenuLabel(got) {
+      got = textNorm(got);
+      if (!got) return false;
+      if (got.indexOf('智能长视频2.0') !== -1) return true;
+      if (got.indexOf('智能长视频') !== -1 && got.indexOf('2.0') !== -1) return true;
+      return false;
+    }
+
+    /**
+     * 小云雀「选择创作模式」面板：挂在 span.lv-dropdown 内，类名为 dropdownPanel-xxx / dropdownItem-xxx，
+     * 与 lv-dropdown-popup-visible 不是同一套 DOM，必须在 [class*="dropdownText"] 上匹配后再点整行。
+     */
+    function findLongVideoRowInXiaoyunqueModePanel() {
+      var titleSpans = doc.querySelectorAll('[class*="dropdownText"]');
+      var i;
+      var sp;
+      var got;
+      var row;
+      for (i = 0; i < titleSpans.length; i++) {
+        sp = titleSpans[i];
+        if (!isVisible(sp)) continue;
+        got = textNorm(sp.textContent || '');
+        if (!got || got.length > 48) continue;
+        if (!matchesLongVideoMenuLabel(got)) continue;
+        if (got.indexOf('2.0') === -1) continue;
+        row = sp.closest('[class*="dropdownItem"]');
+        if (row && isVisible(row)) return row;
+      }
+      return null;
+    }
+
+    function clickRowPreferRealEvents(row) {
+      if (!row) return;
+      try {
+        row.click();
+      } catch (e0) {}
+      try {
+        row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        row.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      } catch (e1) {}
+    }
+
+    /** 仅在已展开的下拉 / listbox 内找项；子节点不要求单独 isVisible（避免弹层内项被误判） */
+    function findLongVideoOptionInOpenMenus() {
+      var fromXyq = findLongVideoRowInXiaoyunqueModePanel();
+      if (fromXyq) return fromXyq;
+
+      var roots = doc.querySelectorAll(
+        'div[class*="lv-dropdown-popup-visible"], div.lv-dropdown-popup-visible, [role="listbox"], div[class*="lv-dropdown-popup"], [class*="dropdownPanel"]',
+      );
+      var ri;
+      var root;
+      var tags = 'span,div,li,button,a,p,[role="option"],[role="menuitem"]';
+      var list;
+      var j;
+      var el;
+      var got;
+      var row;
+      for (ri = 0; ri < roots.length; ri++) {
+        root = roots[ri];
+        if (!isVisible(root)) continue;
+        list = root.querySelectorAll(tags);
+        for (j = 0; j < list.length; j++) {
+          el = list[j];
+          got = textNorm(el.textContent || '');
+          if (!got || got.length > 120) continue;
+          if (!matchesLongVideoMenuLabel(got)) continue;
+          row =
+            (el.closest && el.closest('[class*="dropdownItem"],[role="menuitem"],[role="option"],li,button')) ||
+            el;
+          return row;
+        }
+      }
+      return null;
+    }
+
+    function openModeDropdown(trigger) {
+      if (!trigger) return;
+      try {
+        trigger.click();
+      } catch (e0) {}
+      var caret = trigger.querySelector('[class*="caret"], svg[class*="caret"], .lucide-chevron-down');
+      if (caret) {
+        try {
+          caret.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        } catch (e1) {}
+        try {
+          if (caret.parentElement) caret.parentElement.click();
+        } catch (e2) {}
+      }
+      var innerBtn = trigger.querySelector('button, [role="button"]');
+      if (innerBtn && innerBtn !== trigger) {
+        try {
+          innerBtn.click();
+        } catch (e3) {}
+      }
+    }
+
+    if (isAlreadyLongVideo20InSelectedChips()) {
+      appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.skipAlready智能长视频2.0');
+      return { ok: true };
+    }
+
+    var MODE_MENU_POLL_MS = 2200;
+    var MODE_MENU_POLL_STEP = 140;
+
     while (true) {
-      var mode = getCurrentMode();
-      if (mode.indexOf('视频生成') !== -1) {
+      var trigger = findModeTriggerVideo20();
+      if (!trigger) {
+        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到「视频 2.0」模式触发器' };
+      }
+      appendMainLog(
+        roundId,
+        stepKey,
+        'debug',
+        'Step09v.debug.modeTriggerTag=' + (trigger.tagName || '') + ' cls=' + String(trigger.className || '').slice(0, 80),
+      );
+      openModeDropdown(trigger);
+      appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.openModeDropdownClicked=true');
+
+      var opt = null;
+      var deadline = Date.now() + MODE_MENU_POLL_MS;
+      while (Date.now() < deadline) {
+        opt = findLongVideoOptionInOpenMenus();
+        if (opt) break;
+        await delay(MODE_MENU_POLL_STEP);
+      }
+
+      if (opt) {
+        try {
+          opt.scrollIntoView({ block: 'nearest' });
+        } catch (e1) {}
+        clickRowPreferRealEvents(opt);
+        appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.clickModeOption智能长视频2.0=true');
+        await delay(DELAY_AFTER_OPTION);
         return { ok: true };
       }
-      var typeClicked = clickWhenVisible(findTypeSelect);
-      appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.clickTypeSelect=' + typeClicked);
-      await delay(DELAY_OPEN);
-      var optionClicked = clickOptionWhenVisible('视频生成');
-      appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.clickOption视频生成=' + optionClicked);
-      await delay(DELAY_AFTER_OPTION);
-      var modeNow = getCurrentMode();
-      var typeOk = modeNow.indexOf('视频生成') !== -1;
-      if (typeOk) {
-        return { ok: true };
+
+      appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.longVideoMenuNotFoundAfterPoll');
+      retries++;
+      appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.longVideoOptionRetry=' + retries);
+      if (retries >= 3) {
+        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到「智能长视频 2.0」选项' };
       }
-      modeRetries++;
-      if (modeRetries >= step34Max) {
-        appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.modeRetryExceeded=' + modeRetries);
-        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED' };
-      }
-      await delay(600);
+      try {
+        doc.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+      } catch (eEsc) {}
+      await delay(400);
     }
   }
 
@@ -639,7 +901,8 @@
     while (true) {
       var modeSelectContainer = doc.querySelector('[class*="feature-select"] div[role="combobox"]');
       if (!modeSelectContainer) {
-        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到参考模式下拉框' };
+        appendMainLog(roundId, stepKey, 'debug', 'Step09bv.debug.skipNoRefCombobox_xyq');
+        return { ok: true };
       }
       var valEl = modeSelectContainer.querySelector('.lv-select-view-value');
       var currentMode = valEl ? (valEl.innerText || '').trim() : '';
@@ -668,163 +931,276 @@
 
   /** @param {{ roundId: string, jimengVideoModel?: string }} payload */
   async function runStep10VideoEnsureModel(payload) {
+    return runStep10VideoEnsureModelXiaoyunque(payload);
+  }
+
+  /** @param {{ roundId: string, jimengVideoModel?: string }} payload */
+  async function runStep10VideoEnsureModelXiaoyunque(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step10_jimeng_video_ensure_model';
-    var wantModel = payload && payload.jimengVideoModel && String(payload.jimengVideoModel).trim() ? String(payload.jimengVideoModel).trim() : 'Seedance 2.0 VIP';
-    
-    // There are multiple select boxes in the toolbar: Mode, Model, Reference Mode, Duration.
-    var modelSelectContainer = null;
-    var selects = doc.querySelectorAll('div[class*="toolbar-select"]');
-    if (!selects || selects.length === 0) selects = doc.querySelectorAll('div[class*="lv-select-single"]');
-    
-    for (var k = 0; k < selects.length; k++) {
-      var inner = selects[k].querySelector('.lv-select-view-value');
-      var innerText = inner ? (inner.textContent || '').trim() : '';
-      if (innerText && innerText.indexOf('视频生成') === -1 && innerText.indexOf('图片生成') === -1 && innerText.indexOf('参考') === -1 && !innerText.match(/^\d+s$/)) {
-        modelSelectContainer = selects[k];
-        break;
+    var wantModel =
+      payload && payload.jimengVideoModel && String(payload.jimengVideoModel).trim()
+        ? String(payload.jimengVideoModel).trim()
+        : 'Seedance 2.0 VIP';
+    var retries = 0;
+
+    function isVisible(el) {
+      if (!el) return false;
+      var st = window.getComputedStyle ? window.getComputedStyle(el) : null;
+      if (st && (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0')) return false;
+      return !!(el.offsetParent || (el.getClientRects && el.getClientRects().length));
+    }
+
+    function textNorm(s) {
+      return String(s || '').replace(/\s+/g, '').trim();
+    }
+
+    function textEq(a, b) {
+      return textNorm(a) === textNorm(b);
+    }
+
+    function modelTextFromNode(el) {
+      if (!el) return '';
+      var txt = (el.textContent || '').trim();
+      if (!txt) return '';
+      // 去掉描述串，只取首行/首段模型名
+      return txt.split(/\r?\n/)[0].trim();
+    }
+
+    /** 新版小云雀：模型在 `triggerLabel-*` 上，避免整颗 trigger 含 SVG path 导致 modelTextFromNode 失真 */
+    function readXiaoyunqueTriggerModelLabel(triggerEl) {
+      if (!triggerEl || !triggerEl.querySelector) return modelTextFromNode(triggerEl);
+      var lab = triggerEl.querySelector('[class*="triggerLabel"]');
+      if (lab) {
+        var s = (lab.textContent || '').trim().split(/\r?\n/)[0].trim();
+        if (s) return s;
       }
+      return modelTextFromNode(triggerEl);
     }
-    
-    // Fallback if not found
-    if (!modelSelectContainer) {
-      if (selects.length >= 2) {
-        modelSelectContainer = selects[1];
-      } else {
-        modelSelectContainer = doc.querySelector('div[class*="toolbar-select"]');
+
+    function findModelTrigger() {
+      var labels = doc.querySelectorAll('[class*="triggerLabel"]');
+      var li, lab, host, tn;
+      for (li = 0; li < labels.length; li++) {
+        lab = labels[li];
+        if (!isVisible(lab)) continue;
+        tn = (lab.textContent || '').trim().split(/\r?\n/)[0].trim();
+        if (!tn || tn.indexOf('Seedance') === -1) continue;
+        host = lab.closest('[class*="triggerButton"]');
+        while (host && !isVisible(host)) host = host.parentElement;
+        if (host && isVisible(host)) return host;
       }
-    }
-    
-    var valEl = modelSelectContainer ? modelSelectContainer.querySelector('.lv-select-view-value') : null;
-    var curText = valEl ? (valEl.textContent || '').trim() : '';
-    
-    // We must parse out exactly the text to avoid "Seedance 2.0 Fast VIP" matching "Seedance 2.0"
-    if (valEl) {
-      var textNodes = [];
-      var child = valEl.firstChild;
-      while (child) {
-        if (child.nodeType === 3) textNodes.push(child.textContent);
-        child = child.nextSibling;
-      }
-      curText = textNodes.join('').trim();
-    }
-    if (curText === wantModel) {
-      return { ok: true };
-    }
-    
-    var modelClicked = clickWhenVisible(function () { return modelSelectContainer; });
-    appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.openModelSelect=' + modelClicked);
-    if (!modelClicked) {
-      return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED' };
-    }
-    await delay(DELAY_OPEN);
-    
-    var popups = getVisiblePopups();
-    var targetPopup = popups.length ? popups[popups.length - 1] : null;
-    var options = targetPopup ? targetPopup.querySelectorAll('li[role="option"]') : [];
-    var matchedOpt = null;
-    
-    // fallback: match alt attribute first as it is the most exact
-    var imgs = targetPopup ? targetPopup.querySelectorAll('img') : [];
-    for (var j = 0; j < imgs.length; j++) {
-      var alt = (imgs[j].getAttribute('alt') || '').trim();
-      if (alt === wantModel) {
-        matchedOpt = imgs[j].closest('li[role="option"]');
-        break;
-      }
-    }
-    
-    if (!matchedOpt) {
-      for (var i = 0; i < options.length; i++) {
-        var labelEl = options[i].querySelector('[class*="option-label"]');
-        var optText = '';
-        if (labelEl) {
-          var tNodes = [];
-          var c = labelEl.firstChild;
-          while (c) {
-            if (c.nodeType === 3) tNodes.push(c.textContent);
-            c = c.nextSibling;
-          }
-          optText = tNodes.join('').trim();
-        } else {
-          optText = (options[i].innerText || options[i].textContent || '').trim();
-        }
-        if (optText === wantModel) {
-          matchedOpt = options[i];
-          break;
+      var nodes = doc.querySelectorAll('button,[role="button"],div');
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        if (!isVisible(n)) continue;
+        var t = modelTextFromNode(n);
+        if (!t) continue;
+        // 小云雀模型触发器常见值；避免依赖哈希类名
+        if (
+          t.indexOf('Seedance 2.0 VIP') !== -1 ||
+          t.indexOf('Seedance 2.0 Fast VIP') !== -1 ||
+          t.indexOf('Seedance 2.0 Fast') !== -1
+        ) {
+          return n.tagName === 'BUTTON' ? n : n.closest && n.closest('button,[role="button"],div');
         }
       }
+      return null;
     }
-    
-    if (matchedOpt) {
+
+    /** 下拉已展开时：弹层可能为 lv-dropdown-popup-visible，或小云雀新版挂在 span.lv-dropdown 内的 modelPanel-* */
+    function findXiaoyunqueOpenModelDropdownPanel() {
+      var mi, mp, tx;
+      var modelPanels = doc.querySelectorAll('[class*="modelPanel"]');
+      for (mi = 0; mi < modelPanels.length; mi++) {
+        mp = modelPanels[mi];
+        if (!isVisible(mp)) continue;
+        tx = textNorm(mp.textContent || '');
+        if (tx.indexOf('模型选择') !== -1 && tx.indexOf('Seedance') !== -1) return mp;
+      }
+      var pops = doc.querySelectorAll('div[class*="lv-dropdown-popup-visible"], div.lv-dropdown-popup-visible');
+      var pi, p;
+      for (pi = 0; pi < pops.length; pi++) {
+        p = pops[pi];
+        if (!isVisible(p)) continue;
+        tx = textNorm(p.textContent || '');
+        if (tx.indexOf('模型选择') !== -1) return p;
+        if (p.querySelector('[class*="option-label"]') && tx.indexOf('Seedance') !== -1) return p;
+      }
+      return null;
+    }
+
+    function findModelPanelRoot() {
+      var mi, mp, tx;
+      var modelPanels = doc.querySelectorAll('[class*="modelPanel"]');
+      for (mi = 0; mi < modelPanels.length; mi++) {
+        mp = modelPanels[mi];
+        if (!isVisible(mp)) continue;
+        tx = textNorm(mp.textContent || '');
+        if (tx.indexOf('模型选择') !== -1 && tx.indexOf('Seedance') !== -1) return mp;
+      }
+      var title = findByText(doc.body, '模型选择', 'div,span');
+      if (!title || !isVisible(title)) return null;
+      var p = title;
+      for (var i = 0; i < 8 && p; i++) {
+        var txt = textNorm(p.textContent || '');
+        if (txt.indexOf('模型选择') !== -1 && txt.indexOf('Seedance2.0') !== -1) return p;
+        p = p.parentElement;
+      }
+      return title.parentElement || title;
+    }
+
+    function findModelPanelRootOrOpenDropdown() {
+      return findModelPanelRoot() || findXiaoyunqueOpenModelDropdownPanel();
+    }
+
+    function clickXyqModelRow(row) {
+      if (!row) return;
       try {
-        matchedOpt.scrollIntoView({ block: 'nearest' });
-      } catch(e) {}
-      matchedOpt.click();
-      appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.modelMatchedAndClicked=true');
-    } else {
-      appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.modelNotFound=' + wantModel);
-      return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到指定的视频模型' };
+        row.click();
+      } catch (e0) {}
+      try {
+        row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        row.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      } catch (e1) {}
     }
-    await delay(DELAY_AFTER_OPTION);
-    return { ok: true };
+
+    function readModelNameFromItem(item) {
+      if (!item) return '';
+      var nameEl = item.querySelector('[class*="modelName"]');
+      var sp;
+      var nameText;
+      if (nameEl) {
+        sp = nameEl.querySelector(':scope > span') || nameEl.querySelector('span');
+        nameText = sp ? (sp.textContent || '').trim() : (nameEl.textContent || '').trim();
+      } else {
+        nameText = modelTextFromNode(item);
+      }
+      return textNorm(nameText.split(/\r?\n/)[0].trim());
+    }
+
+    function findModelItemInPanel(panelRoot, modelLabel) {
+      if (!panelRoot) return null;
+      var want = textNorm(modelLabel);
+      var items = panelRoot.querySelectorAll('[class*="modelItem"]');
+      var i;
+      var item;
+      var nt;
+      for (i = 0; i < items.length; i++) {
+        item = items[i];
+        if (!isVisible(item)) continue;
+        nt = readModelNameFromItem(item);
+        if (nt && nt === want) return item;
+      }
+      var rows = panelRoot.querySelectorAll('button,[role="button"],li,div');
+      for (i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if (!isVisible(r)) continue;
+        var txt = textNorm(modelTextFromNode(r));
+        if (!txt) continue;
+        if (txt === want || txt.indexOf(want) !== -1) {
+          return r.tagName === 'BUTTON' ? r : r.closest && r.closest('button,[role="button"],li,div');
+        }
+      }
+      var spans = panelRoot.querySelectorAll('span,div');
+      for (var j = 0; j < spans.length; j++) {
+        var s = spans[j];
+        if (!isVisible(s)) continue;
+        if (!textEq(s.textContent || '', modelLabel)) continue;
+        var row = s.closest && s.closest('[class*="modelItem"],button,[role="button"],li,div');
+        if (row && isVisible(row)) return row;
+      }
+      return null;
+    }
+
+    while (true) {
+      var trigger = findModelTrigger();
+      appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.findXyqModelTrigger=' + !!trigger);
+      if (!trigger) {
+        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到小云雀模型触发器' };
+      }
+
+      var before = readXiaoyunqueTriggerModelLabel(trigger);
+      if (textEq(before, wantModel)) {
+        return { ok: true };
+      }
+
+      /** 进入 Step10 时若模型下拉已展开（lv-dropdown-popup-visible），先直接在面板内点目标，避免再点触发器把面板关掉 */
+      var panelEarly = findModelPanelRootOrOpenDropdown();
+      if (panelEarly) {
+        var itemEarly = findModelItemInPanel(panelEarly, wantModel);
+        appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.xyqModelPanelEarly=' + !!panelEarly + ' item=' + !!itemEarly);
+        if (itemEarly) {
+          try {
+            itemEarly.scrollIntoView({ block: 'nearest' });
+          } catch (eEarly0) {}
+          clickXyqModelRow(itemEarly);
+          appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.clickXyqModelItemEarly=true');
+          await delay(DELAY_AFTER_OPTION);
+          await delay(300);
+          var triggerMid = findModelTrigger();
+          var mid = readXiaoyunqueTriggerModelLabel(triggerMid || trigger);
+          if (textEq(mid, wantModel)) {
+            return { ok: true };
+          }
+        }
+      }
+
+      try {
+        trigger.click();
+      } catch (e0) {}
+      appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.openXyqModelPanel=true');
+      await delay(DELAY_OPEN);
+
+      var panel = findModelPanelRootOrOpenDropdown();
+      appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.findXyqModelPanel=' + !!panel);
+      if (!panel) {
+        retries++;
+        if (retries >= 3) {
+          return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到小云雀模型面板' };
+        }
+        await delay(600);
+        continue;
+      }
+
+      var item = findModelItemInPanel(panel, wantModel);
+      appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.findXyqModelItem=' + !!item);
+      if (!item) {
+        retries++;
+        if (retries >= 3) {
+          return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到指定的小云雀视频模型' };
+        }
+        await delay(600);
+        continue;
+      }
+
+      try {
+        item.scrollIntoView({ block: 'nearest' });
+      } catch (e1) {}
+      clickXyqModelRow(item);
+      appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.clickXyqModelItem=true');
+      await delay(DELAY_AFTER_OPTION);
+      await delay(300);
+
+      var triggerAfter = findModelTrigger();
+      var after = readXiaoyunqueTriggerModelLabel(triggerAfter || trigger);
+      if (textEq(after, wantModel)) {
+        return { ok: true };
+      }
+
+      retries++;
+      appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.xiaoyunqueModelRetry=' + retries + ',after=' + after);
+      if (retries >= 3) {
+        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '模型切换后校验失败' };
+      }
+      await delay(600);
+    }
   }
 
   /** @param {{ roundId: string, jimengVideoRatio?: string }} payload */
   async function runStep11VideoEnsureRatio(payload) {
-    var roundId = payload && payload.roundId ? payload.roundId : '';
-    var stepKey = 'step11_jimeng_video_ensure_ratio';
-    var wantRatio = payload && payload.jimengVideoRatio && String(payload.jimengVideoRatio).trim() ? String(payload.jimengVideoRatio).trim() : '16:9';
-    
-    // 比例按钮文案常为「16:9」后紧跟分辨率（如 720P），innerText 不再是整段 ^\d+:\d+$，取首行或串首的比例片段即可。
-    function readToolbarRatioFromButton(btn) {
-      var raw = (btn.innerText || btn.textContent || '').trim();
-      if (!raw) return '';
-      var head = raw.split(/\r?\n/)[0].trim();
-      var m = head.match(/^(\d+:\d+)/) || raw.match(/^(\d+:\d+)/);
-      return m ? m[1] : '';
-    }
-    // Check if the current button already shows the desired ratio
-    var ratioBtns = doc.querySelectorAll('button[class*="toolbar-button"]');
-    var ratioBtn = null;
-    for (var k = 0; k < ratioBtns.length; k++) {
-      var cand = ratioBtns[k];
-      if (!cand || !cand.offsetParent) continue;
-      var ratioPart = readToolbarRatioFromButton(cand);
-      if (!ratioPart) continue;
-      ratioBtn = cand;
-      if (ratioPart === wantRatio) return { ok: true };
-      break;
-    }
-    
-    if (!ratioBtn) {
-      return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到画面比例按钮' };
-    }
-    
-    var clicked = clickWhenVisible(function () { return ratioBtn; });
-    if (!clicked) return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED' };
-    await delay(DELAY_OPEN);
-    
-    var radios = doc.querySelectorAll('.lv-popover-content input[type="radio"]');
-    var targetRadio = null;
-    for (var m = 0; m < radios.length; m++) {
-      if (radios[m].value === wantRatio) {
-        targetRadio = radios[m];
-        break;
-      }
-    }
-    
-    if (targetRadio) {
-      var labelEl = targetRadio.closest('label.lv-radio') || targetRadio;
-      labelEl.click();
-      appendMainLog(roundId, stepKey, 'debug', 'Step11v.debug.ratioClicked=' + wantRatio);
-    } else {
-      appendMainLog(roundId, stepKey, 'debug', 'Step11v.debug.ratioNotFound=' + wantRatio);
-      return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到指定的画面比例选项' };
-    }
-    await delay(DELAY_AFTER_OPTION);
-    closePopover();
-    return { ok: true };
+    return runStep11VideoEnsureRatioXiaoyunque(payload);
   }
 
   /** @param {{ roundId: string, jimengVideoDuration?: number }} payload */
@@ -884,6 +1260,155 @@
     }
     await delay(DELAY_AFTER_OPTION);
     return { ok: true };
+  }
+
+  /** @param {{ roundId: string, jimengVideoRatio?: string }} payload */
+  async function runStep11VideoEnsureRatioXiaoyunque(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step11_jimeng_video_ensure_ratio';
+    var wantRatio =
+      payload && payload.jimengVideoRatio && String(payload.jimengVideoRatio).trim()
+        ? String(payload.jimengVideoRatio).trim()
+        : '16:9';
+    var retries = 0;
+
+    function isVisible(el) {
+      if (!el) return false;
+      var st = window.getComputedStyle ? window.getComputedStyle(el) : null;
+      if (st && (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0')) return false;
+      return !!(el.offsetParent || (el.getClientRects && el.getClientRects().length));
+    }
+
+    function textNorm(s) {
+      return String(s || '').replace(/\s+/g, '').trim();
+    }
+
+    function mapRatioMenuLabel(ratio) {
+      var r = textNorm(ratio);
+      if (r === '16:9') return '16:9（横屏）';
+      if (r === '9:16') return '9:16（竖屏）';
+      if (r === '4:3') return '4:3';
+      if (r === '3:4') return '3:4';
+      return ratio || '16:9（横屏）';
+    }
+
+    function parseRatioFromMenuText(txt) {
+      var m = String(txt || '').match(/(\d+\s*:\s*\d+)/);
+      return m ? m[1].replace(/\s+/g, '') : '';
+    }
+
+    function isRatioMenuOpen() {
+      var nodes = doc.querySelectorAll('[role="menu"], [role="menuitem"], div, span');
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        if (!isVisible(n)) continue;
+        var t = textNorm(n.textContent || '');
+        if (!t) continue;
+        if (
+          t.indexOf('16:9（横屏）'.replace(/\s+/g, '')) !== -1 ||
+          t.indexOf('9:16（竖屏）'.replace(/\s+/g, '')) !== -1
+        ) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function findRatioMenuItem(labelOrRatio) {
+      var want = textNorm(labelOrRatio);
+      var items = doc.querySelectorAll('[role="menuitem"], li, button, div');
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        if (!isVisible(it)) continue;
+        var txt = textNorm(it.textContent || '');
+        if (!txt) continue;
+        if (txt.indexOf(want) !== -1) return it;
+      }
+      return null;
+    }
+
+    function findCurrentRatioTextFromToolbar() {
+      var nodes = doc.querySelectorAll('button,[role="button"],div,span');
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        if (!isVisible(n)) continue;
+        var t = String(n.textContent || '').trim();
+        var ratio = parseRatioFromMenuText(t);
+        if (ratio === '16:9' || ratio === '9:16' || ratio === '4:3' || ratio === '3:4') return ratio;
+      }
+      return '';
+    }
+
+    function findAspectRatioTriggerByProbe() {
+      // 不依赖 class：在可点击元素中逐个探测，能打开包含「16:9（横屏）/9:16（竖屏）」菜单者即为目标触发器。
+      var candidates = doc.querySelectorAll('button,[role="button"],div[tabindex],div');
+      for (var i = 0; i < candidates.length; i++) {
+        var c = candidates[i];
+        if (!isVisible(c)) continue;
+        var txt = textNorm(c.textContent || '');
+        // 跳过明显无关按钮（上传/@/模式/模型/发送）
+        if (
+          txt.indexOf('Agent模式'.replace(/\s+/g, '')) !== -1 ||
+          txt.indexOf('视频2.0'.replace(/\s+/g, '')) !== -1 ||
+          txt.indexOf('Seedance2.0'.replace(/\s+/g, '')) !== -1 ||
+          txt.indexOf('@引用素材'.replace(/\s+/g, '')) !== -1
+        ) {
+          continue;
+        }
+        try {
+          c.click();
+        } catch (e0) {}
+        var opened = isRatioMenuOpen();
+        if (opened) return c;
+      }
+      return null;
+    }
+
+    var wantLabel = mapRatioMenuLabel(wantRatio);
+    while (true) {
+      // 若菜单已开，直接选项；否则先探测触发器并打开。
+      if (!isRatioMenuOpen()) {
+        var trigger = findAspectRatioTriggerByProbe();
+        appendMainLog(roundId, stepKey, 'debug', 'Step11v.debug.findXyqAspectTrigger=' + !!trigger);
+        if (!trigger) {
+          return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到小云雀画幅比例触发器' };
+        }
+        await delay(DELAY_OPEN);
+      }
+
+      var target = findRatioMenuItem(wantLabel) || findRatioMenuItem(wantRatio);
+      appendMainLog(roundId, stepKey, 'debug', 'Step11v.debug.findXyqRatioItem=' + !!target + ',want=' + wantRatio);
+      if (!target) {
+        retries++;
+        if (retries >= 3) {
+          return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到目标画幅比例选项' };
+        }
+        await delay(600);
+        continue;
+      }
+
+      try {
+        target.scrollIntoView({ block: 'nearest' });
+      } catch (e1) {}
+      try {
+        target.click();
+      } catch (e2) {}
+      appendMainLog(roundId, stepKey, 'debug', 'Step11v.debug.clickXyqRatioItem=true');
+      await delay(DELAY_AFTER_OPTION);
+      await delay(240);
+
+      var ratioNow = findCurrentRatioTextFromToolbar();
+      if (textNorm(ratioNow) === textNorm(wantRatio)) {
+        return { ok: true };
+      }
+
+      retries++;
+      appendMainLog(roundId, stepKey, 'debug', 'Step11v.debug.xiaoyunqueRatioRetry=' + retries + ',now=' + ratioNow);
+      if (retries >= 3) {
+        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '比例切换后校验失败' };
+      }
+      await delay(600);
+    }
   }
 
   /** @param {{ roundId: string, ratioLabel?: string, resolutionLabel?: string }} payload */
@@ -1126,7 +1651,7 @@
   async function runStep12ClearForm(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step12_jimeng_clear_form';
-    var target = findJimengPromptField();
+    var target = findXiaoyunqueVideoPromptField();
     if (!target) {
       appendMainLog(roundId, stepKey, 'info', 'Step12.动作失败+未找到提示词输入区域');
       return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
@@ -1336,7 +1861,7 @@
     if (!inj || typeof inj.dataUrlToBlob !== 'function') {
       return { ok: false, code: 'JIMENG_PAGE_HELPERS_MISSING' };
     }
-    var target = findJimengPromptField();
+    var target = findXiaoyunqueVideoPromptField();
     if (!target) {
       return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
     }
@@ -1461,7 +1986,7 @@
   async function runStep15bVideoExpandAudioMentions(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step15b_jimeng_video_expand_audio_mentions';
-    var target = findJimengPromptField();
+    var target = findXiaoyunqueVideoPromptField();
     if (!target) {
       return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
     }
@@ -1544,7 +2069,7 @@
     if (!inj || typeof inj.dataUrlToBlob !== 'function' || typeof inj.collectJimengReferenceFileInputs !== 'function') {
       return { ok: false, code: 'JIMENG_PAGE_HELPERS_MISSING' };
     }
-    var target = findJimengPromptField();
+    var target = findXiaoyunqueVideoPromptField();
     if (!target) {
       return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
     }
@@ -1636,7 +2161,7 @@
   async function runStep14FillPromptText(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step14_jimeng_fill_prompt_text';
-    var target = findJimengPromptField();
+    var target = findXiaoyunqueVideoPromptField();
     if (!target) {
       appendMainLog(roundId, stepKey, 'info', 'Step14.动作失败+未找到提示词输入区域');
       return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
@@ -1673,7 +2198,7 @@
         return { ok: false, code: 'JIMENG_PROMPT_PLACEHOLDER_MISMATCH' };
       }
     }
-    var target = findJimengPromptField();
+    var target = findXiaoyunqueVideoPromptField();
     if (!target) {
       return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
     }
@@ -2786,7 +3311,7 @@
       appendMainLog(roundId, stepKey, 'info', 'Step18.非Enter提交模式+未在提示词区派发Enter');
       return { ok: true, skipped: true };
     }
-    var target = findJimengPromptField();
+    var target = findXiaoyunqueVideoPromptField();
     if (!target) {
       appendMainLog(roundId, stepKey, 'info', 'Step18.动作失败+未找到提示词输入区域');
       return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
@@ -3507,7 +4032,7 @@
     })();
   }
 
-  g.__picpuckJimengImage = {
+  g.__picpuckXiaoyunqueVideo = {
     runStep07EnsureWorkbenchReady: runStep07EnsureWorkbenchReady,
     runStep08CloseOpenPopovers: runStep08CloseOpenPopovers,
     runStep09EnsureModeImageGeneration: runStep09EnsureModeImageGeneration,

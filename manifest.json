@@ -52,6 +52,7 @@
       "resources": [
         "src/core/injectHelpersMainWorld.js",
         "src/agents/jimeng/jimengImageMainWorld.js",
+        "src/agents/xiaoyunque/xiaoyunqueVideoMainWorld.js",
         "src/agents/gemini/geminiImageMainWorld.js",
         "src/core/picpuckFetchCaptureMainWorld.js"
       ],

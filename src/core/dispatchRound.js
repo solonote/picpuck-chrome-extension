@@ -240,30 +240,41 @@ export async function dispatchRound(args) {
     const cancelled =
       msg === 'ASYNC_JOB_CANCELLED' ||
       (e && typeof e === 'object' && /** @type {{ code?: string }} */ (e).code === 'ASYNC_JOB_CANCELLED');
-    /** 顶栏 lastInfoMessage 仅来自 info：把错误码压进 Step99，便于用户留在失败态时仍可见原因（须匹配 StepNN. 前缀校验） */
-    const failInfoMsg = cancelled
-      ? 'Step99.本轮结束+已取消'
-      : (() => {
-          const flat = String(msg).replace(/\s+/g, ' ').trim();
-          const base = 'Step99.本轮结束+失败+';
-          const max = 880;
-          const rest = flat.length > max - base.length ? flat.slice(0, max - base.length - 3) + '...' : flat;
-          return base + rest;
-        })();
-    appendLog(tabId, {
-      ts: Date.now(),
-      roundId,
-      step: 'system',
-      level: 'info',
-      message: failInfoMsg,
-    });
-    appendLog(tabId, {
-      ts: Date.now(),
-      roundId,
-      step: 'system',
-      level: 'debug',
-      message: 'Step99.debug.' + msg.slice(0, 500),
-    });
+    if (cancelled) {
+      /** 取消：仍用 Step99 info，与成功收尾对称 */
+      appendLog(tabId, {
+        ts: Date.now(),
+        roundId,
+        step: 'system',
+        level: 'info',
+        message: 'Step99.本轮结束+已取消',
+      });
+    } else {
+      /**
+       * 失败：勿再写 Step99 的 info，否则会覆盖顶栏 lastInfoMessage（§6.3 仅 info 更新摘要），
+       * 用户应继续看到最后一条业务步骤的失败 info（如 Step09.动作失败+…）。
+       * 轮次级摘要仅写入 debug，导出日志仍可检索。
+       */
+      let roundEndDetail = String(msg).replace(/\s+/g, ' ').trim();
+      if (msg === 'STEP_OK_FALSE' && e && typeof e === 'object') {
+        const sr = /** @type {{ stepResult?: { code?: string, detail?: string } }} */ (e).stepResult;
+        if (sr && typeof sr === 'object') {
+          const c = sr.code != null ? String(sr.code) : '';
+          const d = sr.detail != null ? String(sr.detail) : '';
+          roundEndDetail =
+            'STEP_OK_FALSE' +
+            (c ? ` code=${c}` : '') +
+            (d ? ` detail=${d.slice(0, 300)}` : '');
+        }
+      }
+      appendLog(tabId, {
+        ts: Date.now(),
+        roundId,
+        step: 'system',
+        level: 'debug',
+        message: `Step99.debug.roundEndFail ${roundEndDetail.slice(0, 700)}`,
+      });
+    }
     updatePhase(tabId, 'error');
     await pushRoundPhaseUi(tabId, roundId);
   } finally {

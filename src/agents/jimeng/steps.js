@@ -1,6 +1,6 @@
 /**
  * 即梦站点业务步骤（step01～step03 由 core/dispatchRound 框架固定执行）。
- * 小云雀为独立 `XIAOYUNQUE_VIDEO_FILL`：专用 step04/step05 与 `ctx.command` 分流文案；MAIN 注入文件名 `jimengImageMainWorld.js` 为历史遗留。
+ * 小云雀 `XIAOYUNQUE_VIDEO_FILL`：专用 step05 与 `ctx.command` 分流；MAIN 注入 `xiaoyunqueVideoMainWorld.js`（与即梦脚本完全分离）。
  */
 import { executeInAllFrames } from '../../core/executeAllFrames.js';
 import { scrollBottomViaInjectMain } from '../../core/mainWorldScrollTop.js';
@@ -23,6 +23,7 @@ import {
 
 /** 设计 §3.1.1：与 `manifest.json` `web_accessible_resources` 路径一致 */
 const JIMENG_IMAGE_MAIN_WORLD_FILE = 'src/agents/jimeng/jimengImageMainWorld.js';
+const XIAOYUNQUE_VIDEO_MAIN_WORLD_FILE = 'src/agents/xiaoyunque/xiaoyunqueVideoMainWorld.js';
 
 function payloadString(payload, key) {
   if (!payload || typeof payload !== 'object') return '';
@@ -110,6 +111,61 @@ async function ensureJimengImageMainWorldInjected(tabId) {
     world: 'MAIN',
     files: [JIMENG_IMAGE_MAIN_WORLD_FILE],
   });
+}
+
+async function ensureXiaoyunqueVideoMainWorldInjected(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    files: [XIAOYUNQUE_VIDEO_MAIN_WORLD_FILE],
+  });
+}
+
+/**
+ * 注入 `xiaoyunqueVideoMainWorld.js` 并调用 `globalThis.__picpuckXiaoyunqueVideo[runnerName](payload)`。
+ * 仅用于 `XIAOYUNQUE_VIDEO_FILL` 工作台步骤（与即梦 MAIN 隔离）。
+ */
+async function execXiaoyunqueVideoMainRunner(ctx, opts) {
+  const { tabId, roundId } = ctx;
+  const { nn, stepKey, runnerName, mainPayload, failUserMsg, startMsg, doneMsg } = opts;
+  logStepEnter(tabId, roundId, stepKey, nn, startMsg);
+  try {
+    await ensureXiaoyunqueVideoMainWorldInjected(tabId);
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    logStepFail(tabId, roundId, stepKey, nn, mainWorldInjectFailUserMsg(ctx), m.slice(0, 500));
+    throw new Error(JIMENG_IMAGE_MAIN_INJECT_FAILED);
+  }
+  const mergedPayload = { roundId, ...mainPayload };
+  const [injRes] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: async (packed) => {
+      const g = typeof globalThis !== 'undefined' ? globalThis : window;
+      const inj = g.__picpuckXiaoyunqueVideo;
+      if (!inj || typeof inj[packed.runnerName] !== 'function') {
+        return { ok: false, code: 'JIMENG_IMAGE_MAIN_INJECT_FAILED' };
+      }
+      return inj[packed.runnerName](packed.payload);
+    },
+    args: [{ runnerName, payload: mergedPayload }],
+  });
+  const r = injRes?.result;
+  if (!r || r.ok !== true) {
+    const code = r && r.code ? String(r.code) : JIMENG_WORKBENCH_NOT_READY;
+    const detail = r && typeof r.detail === 'string' ? r.detail : '';
+    logStepFail(tabId, roundId, stepKey, nn, failUserMsg, (detail || code).slice(0, 500));
+    throw new Error(code);
+  }
+  logStepDone(tabId, roundId, stepKey, nn, doneMsg);
+}
+
+/** 即梦视频填词链路与小云雀视频填词链路共用 stepKey 时，按 `command` 选择 MAIN 注入目标。 */
+async function execJimengOrXyqVideoWorkbenchRunner(ctx, opts) {
+  if (isXiaoyunqueVideoCommand(ctx)) {
+    return execXiaoyunqueVideoMainRunner(ctx, opts);
+  }
+  return execJimengMainRunner(ctx, opts);
 }
 
 /**
@@ -551,7 +607,7 @@ export async function step05_xiaoyunque_ensure_home(ctx) {
 
 /** 设计 §4.1.2：工作台就绪（仅 hasForm 链，不切换模式/模型） */
 export async function step07_jimeng_ensure_workbench_ready(ctx) {
-  await execJimengMainRunner(ctx, {
+  await execJimengOrXyqVideoWorkbenchRunner(ctx, {
     nn: 7,
     stepKey: 'step07_jimeng_ensure_workbench_ready',
     runnerName: 'runStep07EnsureWorkbenchReady',
@@ -568,7 +624,7 @@ export async function step07_jimeng_ensure_workbench_ready(ctx) {
 
 /** 设计 §4.1.2：关闭 lv-select / popover */
 export async function step08_jimeng_close_open_popovers(ctx) {
-  await execJimengMainRunner(ctx, {
+  await execJimengOrXyqVideoWorkbenchRunner(ctx, {
     nn: 8,
     stepKey: 'step08_jimeng_close_open_popovers',
     runnerName: 'runStep08CloseOpenPopovers',
@@ -594,13 +650,12 @@ export async function step09_jimeng_ensure_mode_image_generation(ctx) {
 
 /** 视频模式：类型选择器切「视频生成」 */
 export async function step09_jimeng_video_ensure_mode_video_generation(ctx) {
-  const { payload } = ctx;
   const useXiaoyunque = isXiaoyunqueVideoCommand(ctx);
-  await execJimengMainRunner(ctx, {
+  await execJimengOrXyqVideoWorkbenchRunner(ctx, {
     nn: 9,
     stepKey: 'step09_jimeng_video_ensure_mode_video_generation',
     runnerName: 'runStep09VideoEnsureModeVideoGeneration',
-    mainPayload: { xiaoyunqueMode: useXiaoyunque ? 'long_video_2' : '' },
+    mainPayload: {},
     failUserMsg: useXiaoyunque ? '动作失败+无法切换到智能长视频 2.0 模式' : '动作失败+无法切换到视频生成模式',
     startMsg: useXiaoyunque ? '切换到小云雀「智能长视频 2.0」模式' : '将生成类型切换为「视频生成」',
     doneMsg: useXiaoyunque ? '已切换到智能长视频 2.0 模式' : '已处于视频生成模式',
@@ -609,7 +664,8 @@ export async function step09_jimeng_video_ensure_mode_video_generation(ctx) {
 
 /** 视频模式：参考模式切「全能参考」 */
 export async function step09b_jimeng_video_ensure_reference_mode(ctx) {
-  await execJimengMainRunner(ctx, {
+  const useXiaoyunque = isXiaoyunqueVideoCommand(ctx);
+  await execJimengOrXyqVideoWorkbenchRunner(ctx, {
     nn: 9,
     stepKey: 'step09b_jimeng_video_ensure_reference_mode',
     runnerName: 'runStep09bVideoEnsureReferenceMode',
@@ -620,7 +676,7 @@ export async function step09b_jimeng_video_ensure_reference_mode(ctx) {
       '动作失败+小云雀无法切换至全能参考模式',
     ),
     startMsg: '将参考模式切换为「全能参考」',
-    doneMsg: '参考模式已切换',
+    doneMsg: useXiaoyunque ? '参考模式步骤已完成（智能长视频 2.0 无独立控件则跳过）' : '参考模式已切换',
   });
 }
 
@@ -643,14 +699,12 @@ export async function step10_jimeng_ensure_model(ctx) {
 /** 视频模式：选择指定模型 */
 export async function step10_jimeng_video_ensure_model(ctx) {
   const { payload } = ctx;
-  const useXiaoyunque = isXiaoyunqueVideoCommand(ctx);
-  await execJimengMainRunner(ctx, {
+  await execJimengOrXyqVideoWorkbenchRunner(ctx, {
     nn: 10,
     stepKey: 'step10_jimeng_video_ensure_model',
     runnerName: 'runStep10VideoEnsureModel',
     mainPayload: {
       jimengVideoModel: payloadString(payload, 'jimengVideoModel'),
-      xiaoyunqueMode: useXiaoyunque ? 'long_video_2' : '',
     },
     failUserMsg: jimengOrXyqUserMsg(ctx, '动作失败+无法选择即梦视频模型', '动作失败+无法选择小云雀视频模型'),
     startMsg: '选择请求指定的视频模型',
@@ -678,14 +732,12 @@ export async function step11_jimeng_ensure_ratio_resolution(ctx) {
 /** 视频模式：设定画面比例 */
 export async function step11_jimeng_video_ensure_ratio(ctx) {
   const { payload } = ctx;
-  const useXiaoyunque = isXiaoyunqueVideoCommand(ctx);
-  await execJimengMainRunner(ctx, {
+  await execJimengOrXyqVideoWorkbenchRunner(ctx, {
     nn: 11,
     stepKey: 'step11_jimeng_video_ensure_ratio',
     runnerName: 'runStep11VideoEnsureRatio',
     mainPayload: {
       jimengVideoRatio: payloadString(payload, 'jimengVideoRatio'),
-      xiaoyunqueMode: useXiaoyunque ? 'long_video_2' : '',
     },
     failUserMsg: '动作失败+无法设置画面比例',
     startMsg: '设置画面比例',
@@ -696,7 +748,7 @@ export async function step11_jimeng_video_ensure_ratio(ctx) {
 /** 视频模式：设定生成时长 */
 export async function step11b_jimeng_video_ensure_duration(ctx) {
   const { payload } = ctx;
-  await execJimengMainRunner(ctx, {
+  await execJimengOrXyqVideoWorkbenchRunner(ctx, {
     nn: 11,
     stepKey: 'step11b_jimeng_video_ensure_duration',
     runnerName: 'runStep11bVideoEnsureDuration',
@@ -711,7 +763,7 @@ export async function step11b_jimeng_video_ensure_duration(ctx) {
 
 /** 清空提示词并移除页面已有参考图（两条固定 Step12 info 在 MAIN） */
 export async function step12_jimeng_clear_form(ctx) {
-  await execJimengMainRunner(ctx, {
+  await execJimengOrXyqVideoWorkbenchRunner(ctx, {
     nn: 12,
     stepKey: 'step12_jimeng_clear_form',
     runnerName: 'runStep12ClearForm',
@@ -735,7 +787,7 @@ export async function step13_jimeng_paste_reference_clear_prompt(ctx) {
     logStepInfo(tabId, roundId, stepKey, 13, '无参考图跳过粘贴参考图');
     return;
   }
-  await execJimengMainRunner(ctx, {
+  await execJimengOrXyqVideoWorkbenchRunner(ctx, {
     nn: 13,
     stepKey,
     runnerName: 'runStep13PasteReferenceClearPrompt',
@@ -754,7 +806,7 @@ export async function step13b_jimeng_video_paste_reference_audio(ctx) {
     logStepInfo(tabId, roundId, stepKey, 13, '无参考音频跳过粘贴');
     return;
   }
-  await execJimengMainRunner(ctx, {
+  await execJimengOrXyqVideoWorkbenchRunner(ctx, {
     nn: 13,
     stepKey,
     runnerName: 'runStep13bVideoPasteReferenceAudio',
@@ -768,7 +820,7 @@ export async function step13b_jimeng_video_paste_reference_audio(ctx) {
 /** 写入用户提示词（含占位符文案） */
 export async function step14_jimeng_fill_prompt_text(ctx) {
   const { payload } = ctx;
-  await execJimengMainRunner(ctx, {
+  await execJimengOrXyqVideoWorkbenchRunner(ctx, {
     nn: 14,
     stepKey: 'step14_jimeng_fill_prompt_text',
     runnerName: 'runStep14FillPromptText',
@@ -791,7 +843,7 @@ export async function step15_jimeng_expand_at_mentions(ctx) {
   /** @ 选参考图依赖前台 Tab；后台时 lv-select 下拉/选片不可靠 */
   logStepInfo(tabId, roundId, stepKey, 15, '选图前聚焦工作窗口与 Tab');
   await focusWorkTab(tabId);
-  await execJimengMainRunner(ctx, {
+  await execJimengOrXyqVideoWorkbenchRunner(ctx, {
     nn: 15,
     stepKey,
     runnerName: 'runStep15ExpandAtMentions',
@@ -820,7 +872,7 @@ export async function step15b_jimeng_video_expand_audio_mentions(ctx) {
   }
   logStepInfo(tabId, roundId, stepKey, 15, '选音频前聚焦工作窗口与 Tab');
   await focusWorkTab(tabId);
-  await execJimengMainRunner(ctx, {
+  await execJimengOrXyqVideoWorkbenchRunner(ctx, {
     nn: 15,
     stepKey,
     runnerName: 'runStep15bVideoExpandAudioMentions',
