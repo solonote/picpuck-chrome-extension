@@ -1,11 +1,12 @@
 /**
- * 即梦站点 Agent：仅本文件注册 `homeUrl`（站点前缀）/`taskBaseUrl`（本 Task 起始页）/步骤（R18）；core 不得硬编码即梦 URL（§9.1）。
+ * 即梦（jimeng）与小云雀（xyq）分列：`command` / `homeUrl` / `taskBaseUrl` / 首几步互不混用；core 不得硬编码站点 URL（§9.1）。
  */
 import { registerAgentCommands } from '../../core/registry.js';
-import { JIMENG_AI_TOOL_HOME } from './jimengUrls.js';
+import { JIMENG_AI_TOOL_HOME, XIAOYUNQUE_HOME } from './jimengUrls.js';
 import {
   step04_jimeng_require_logged_in,
   step05_jimeng_ensure_ai_tool_home,
+  step05_xiaoyunque_ensure_home,
   step07_jimeng_ensure_workbench_ready,
   step08_jimeng_close_open_popovers,
   step09_jimeng_ensure_mode_image_generation,
@@ -79,6 +80,29 @@ registerAgentCommands([
     step14_jimeng_fill_prompt_text,
     step15_jimeng_expand_at_mentions,
     step15b_jimeng_video_expand_audio_mentions,
+    ],
+  },
+  {
+    command: 'XIAOYUNQUE_VIDEO_FILL',
+    picpuckAction: 'xiaoyunqueGenerateVideo',
+    homeUrl: 'https://xyq.jianying.com',
+    taskBaseUrl: XIAOYUNQUE_HOME,
+    steps: [
+      /* 登录检测在 step05 末尾调用 step04_xiaoyunque（先进入 xyq 再判登录） */
+      step05_xiaoyunque_ensure_home,
+      step07_jimeng_ensure_workbench_ready,
+      step08_jimeng_close_open_popovers,
+      step09_jimeng_video_ensure_mode_video_generation,
+      step09b_jimeng_video_ensure_reference_mode,
+      step10_jimeng_video_ensure_model,
+      step11_jimeng_video_ensure_ratio,
+      step11b_jimeng_video_ensure_duration,
+      step12_jimeng_clear_form,
+      step13_jimeng_paste_reference_clear_prompt,
+      step13b_jimeng_video_paste_reference_audio,
+      step14_jimeng_fill_prompt_text,
+      step15_jimeng_expand_at_mentions,
+      step15b_jimeng_video_expand_audio_mentions,
     ],
   },
 ]);

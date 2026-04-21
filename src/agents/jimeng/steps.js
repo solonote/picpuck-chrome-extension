@@ -1,5 +1,6 @@
 /**
  * 即梦站点业务步骤（step01～step03 由 core/dispatchRound 框架固定执行）。
+ * 小云雀为独立 `XIAOYUNQUE_VIDEO_FILL`：专用 step04/step05 与 `ctx.command` 分流文案；MAIN 注入文件名 `jimengImageMainWorld.js` 为历史遗留。
  */
 import { executeInAllFrames } from '../../core/executeAllFrames.js';
 import { scrollBottomViaInjectMain } from '../../core/mainWorldScrollTop.js';
@@ -29,9 +30,28 @@ function payloadString(payload, key) {
   return typeof v === 'string' ? v : '';
 }
 
-function isXiaoyunqueVideoEngine(payload) {
-  const core = payloadString(payload, 'core_engine').toLowerCase();
-  return core.indexOf('xiaoyunque') !== -1;
+/** 小云雀视频为独立 `command`，不得再依赖 payload 猜站点（与即梦完全分离）。 */
+function isXiaoyunqueVideoCommand(ctx) {
+  return !!(ctx && ctx.command === 'XIAOYUNQUE_VIDEO_FILL');
+}
+
+function jimengOrXyqUserMsg(ctx, jimengMsg, xyqMsg) {
+  return isXiaoyunqueVideoCommand(ctx) ? xyqMsg : jimengMsg;
+}
+
+function mainWorldInjectFailUserMsg(ctx) {
+  return isXiaoyunqueVideoCommand(ctx)
+    ? '动作失败+页内小云雀自动化脚本注入失败请刷新页面后重试'
+    : '动作失败+页内即梦脚本注入失败请刷新页面后重试';
+}
+
+/** PicPuck 工作区 Tab 是否允许 `tabs.update` 到 https（含 about:blank）。 */
+function tabUrlAllowsNavigateToHttps(url) {
+  const u = typeof url === 'string' ? url : '';
+  if (!u) return true;
+  if (u.startsWith('http://') || u.startsWith('https://')) return true;
+  if (u === 'about:blank' || u.startsWith('about:blank?')) return true;
+  return false;
 }
 
 /** 熔炉传 `ratio`（如 9/16）时映射为即梦 radio 的 value（9:16）；显式 `ratioLabel` 优先 */
@@ -105,7 +125,7 @@ async function execJimengMainRunner(ctx, opts) {
     await ensureJimengImageMainWorldInjected(tabId);
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e);
-    logStepFail(tabId, roundId, stepKey, nn, '动作失败+页内即梦脚本注入失败请刷新页面后重试', m.slice(0, 500));
+    logStepFail(tabId, roundId, stepKey, nn, mainWorldInjectFailUserMsg(ctx), m.slice(0, 500));
     throw new Error(JIMENG_IMAGE_MAIN_INJECT_FAILED);
   }
   const mergedPayload = { roundId, ...mainPayload };
@@ -145,7 +165,7 @@ async function execJimengMainRunnerWithResult(ctx, opts) {
     await ensureJimengImageMainWorldInjected(tabId);
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e);
-    logStepFail(tabId, roundId, stepKey, nn, '动作失败+页内即梦脚本注入失败请刷新页面后重试', m.slice(0, 500));
+    logStepFail(tabId, roundId, stepKey, nn, mainWorldInjectFailUserMsg(ctx), m.slice(0, 500));
     throw new Error(JIMENG_IMAGE_MAIN_INJECT_FAILED);
   }
   const mergedPayload = { roundId, ...mainPayload };
@@ -184,7 +204,7 @@ async function execJimengRecoverMainRunner(ctx, opts) {
     await ensureJimengImageMainWorldInjected(tabId);
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e);
-    logStepFail(tabId, roundId, stepKey, nn, '动作失败+页内即梦脚本注入失败请刷新页面后重试', m.slice(0, 500));
+    logStepFail(tabId, roundId, stepKey, nn, mainWorldInjectFailUserMsg(ctx), m.slice(0, 500));
     throw new Error(JIMENG_IMAGE_MAIN_INJECT_FAILED);
   }
   const mergedPayload = { roundId, ...mainPayload };
@@ -275,6 +295,36 @@ function buildJimengRelayGenerationEvent(payload, ctx) {
 }
 
 /**
+ * MAIN 注入：小云雀 xyq 域内用稳定语义判断登录（不依赖 CSS Modules 哈希类名如 userAvatar-xxxxx）。
+ * 须在 `hostname === 'xyq.jianying.com'` 的文档上才返回 1，避免在即梦域误判。
+ */
+function readXiaoyunqueLoggedInFlagMain() {
+  try {
+    const doc = typeof document !== 'undefined' ? document : null;
+    if (!doc) return 0;
+    let hostname = '';
+    try {
+      hostname = String((window.location && window.location.hostname) || '');
+    } catch {
+      hostname = '';
+    }
+    if (hostname !== 'xyq.jianying.com') return 0;
+
+    const imgs = doc.querySelectorAll('img[alt="用户头像"]');
+    for (let i = 0; i < imgs.length; i += 1) {
+      const src = String(imgs[i].getAttribute('src') || '');
+      if (src.indexOf('byteacctimg.com') !== -1 || src.indexOf('user-avatar') !== -1) return 1;
+    }
+
+    if (doc.querySelector('button[aria-controls^="points-"][aria-haspopup="dialog"]')) return 1;
+
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * MAIN 注入：与旧版 `readJimengLoggedInFlag` 一致，`allFrames: true` 时任一 frame 返回 1 即视为已登录。
  */
 function readJimengLoggedInFlagMain() {
@@ -293,6 +343,7 @@ function readJimengLoggedInFlagMain() {
 
 /**
  * 未登录则本轮失败（较旧版「仍执行脚本」更严格：PicPuck 侧直接收到 error phase）。
+ * 仅即梦 `command`；小云雀见 {@link step04_xiaoyunque_require_logged_in}。
  */
 export async function step04_jimeng_require_logged_in(ctx) {
   const { tabId, roundId } = ctx;
@@ -317,33 +368,42 @@ export async function step04_jimeng_require_logged_in(ctx) {
   logStepDone(tabId, roundId, stepKey, 4, '已确认即梦登录状态');
 }
 
+/** 小云雀视频专用：DOM 探测与即梦完全独立，见 {@link readXiaoyunqueLoggedInFlagMain}。 */
+export async function step04_xiaoyunque_require_logged_in(ctx) {
+  const { tabId, roundId } = ctx;
+  const stepKey = 'step04_xiaoyunque_require_logged_in';
+  logStepEnter(tabId, roundId, stepKey, 4, '检查各 frame 是否已登录小云雀');
+
+  const frameResults = await executeInAllFrames(tabId, readXiaoyunqueLoggedInFlagMain);
+  const loggedIn = frameResults.some((v) => v === 1);
+
+  if (!loggedIn) {
+    logStepFail(
+      tabId,
+      roundId,
+      stepKey,
+      4,
+      '动作失败+未登录小云雀请先登录后再使用生成功能',
+      'readXiaoyunqueLoggedInFlag frames=' + frameResults.length,
+    );
+    throw new Error('XIAOYUNQUE_NOT_LOGGED_IN');
+  }
+
+  logStepDone(tabId, roundId, stepKey, 4, '已确认小云雀登录状态');
+}
+
 /**
  * 已登录：若不在 `ai-tool/generate` 则整页导航至任务起始页，加载完成后滚至页底（懒加载后再滚一次）；已在该页则仅滚底。
  */
 export async function step05_jimeng_ensure_ai_tool_home(ctx) {
-  const { tabId, roundId, payload } = ctx;
+  const { tabId, roundId } = ctx;
   const stepKey = 'step05_jimeng_ensure_ai_tool_home';
-  const useXiaoyunque = isXiaoyunqueVideoEngine(payload);
-  const targetHost = useXiaoyunque ? 'xyq.jianying.com' : 'jimeng.jianying.com';
-  const targetHome = useXiaoyunque ? XIAOYUNQUE_HOME : JIMENG_AI_TOOL_HOME;
-  logStepEnter(
-    tabId,
-    roundId,
-    stepKey,
-    5,
-    useXiaoyunque ? '确认在小云雀站点并进入视频工作台首页' : '确认在即梦站点并进入 AI 生成起始页',
-  );
+  logStepEnter(tabId, roundId, stepKey, 5, '确认在即梦站点并进入 AI 生成起始页');
 
   const tab = await chrome.tabs.get(tabId);
   const url = tab.url || '';
-  if (url.indexOf(targetHost) === -1) {
-    logStepInfo(
-      tabId,
-      roundId,
-      stepKey,
-      5,
-      useXiaoyunque ? '动作失败+当前标签页不是小云雀站点' : '动作失败+当前标签页不是即梦站点',
-    );
+  if (url.indexOf('jimeng.jianying.com') === -1) {
+    logStepInfo(tabId, roundId, stepKey, 5, '动作失败+当前标签页不是即梦站点');
     throw new Error('JIMENG_NOT_JIMENG_TAB');
   }
 
@@ -369,38 +429,22 @@ export async function step05_jimeng_ensure_ai_tool_home(ctx) {
     });
   }
 
-  const onTargetHome = useXiaoyunque ? isXiaoyunqueHomeUrl(url) : isJimengAiToolHomeUrl(url);
-  if (onTargetHome) {
-    logStepInfo(
-      tabId,
-      roundId,
-      stepKey,
-      5,
-      useXiaoyunque ? '已在小云雀首页将页面滚至底部' : '已在生成起始页将页面滚至底部',
-    );
+  if (isJimengAiToolHomeUrl(url)) {
+    logStepInfo(tabId, roundId, stepKey, 5, '已在生成起始页将页面滚至底部');
     await scrollGeneratePageToBottom();
     await pushRoundPhaseUi(tabId, roundId);
     logStepDone(tabId, roundId, stepKey, 5, '生成起始页就绪');
     return;
   }
 
-  logStepInfo(
-    tabId,
-    roundId,
-    stepKey,
-    5,
-    useXiaoyunque ? '正在导航至小云雀首页' : '正在导航至即梦生成起始页',
-  );
+  logStepInfo(tabId, roundId, stepKey, 5, '正在导航至即梦生成起始页');
 
   try {
-    await chrome.tabs.update(tabId, { url: targetHome });
+    await chrome.tabs.update(tabId, { url: JIMENG_AI_TOOL_HOME });
     await waitForTabUrlWhen(
       tabId,
       45000,
-      (u) => {
-        if (u.indexOf(targetHost) === -1) return false;
-        return useXiaoyunque ? isXiaoyunqueHomeUrl(u) : isJimengAiToolHomeUrl(u);
-      },
+      (u) => u.indexOf('jimeng.jianying.com') !== -1 && isJimengAiToolHomeUrl(u),
       'JIMENG_HOME_NAV_TIMEOUT',
     );
   } catch (e) {
@@ -410,7 +454,7 @@ export async function step05_jimeng_ensure_ai_tool_home(ctx) {
       roundId,
       stepKey,
       5,
-      useXiaoyunque ? '动作失败+无法打开小云雀首页请稍后重试' : '动作失败+无法打开即梦生成起始页请稍后重试',
+      '动作失败+无法打开即梦生成起始页请稍后重试',
       m.slice(0, 500),
     );
     throw e;
@@ -428,6 +472,83 @@ export async function step05_jimeng_ensure_ai_tool_home(ctx) {
   logStepDone(tabId, roundId, stepKey, 5, '已打开生成起始页并滚底');
 }
 
+/**
+ * 小云雀视频：进入 xyq 首页并滚底（独立于即梦）。
+ * 登录态在导航/滚底之后由 {@link step04_xiaoyunque_require_logged_in} 校验，避免在非 xyq 页误判。
+ */
+export async function step05_xiaoyunque_ensure_home(ctx) {
+  const { tabId, roundId } = ctx;
+  const stepKey = 'step05_xiaoyunque_ensure_home';
+  logStepEnter(tabId, roundId, stepKey, 5, '确认在小云雀站点并进入视频工作台首页');
+
+  const tab = await chrome.tabs.get(tabId);
+  const url = tab.url || '';
+  if (!tabUrlAllowsNavigateToHttps(url)) {
+    logStepInfo(tabId, roundId, stepKey, 5, '动作失败+当前标签页无法导航至小云雀请在本页为可导航的普通网页后重试');
+    throw new Error('XIAOYUNQUE_TAB_NOT_NAVIGABLE');
+  }
+
+  async function scrollGeneratePageToBottom() {
+    await new Promise((r) => setTimeout(r, 400));
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: scrollBottomViaInjectMain,
+    });
+    await new Promise((r) => setTimeout(r, 450));
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: scrollBottomViaInjectMain,
+    });
+    await new Promise((r) => setTimeout(r, 550));
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: scrollBottomViaInjectMain,
+    });
+  }
+
+  if (isXiaoyunqueHomeUrl(url)) {
+    logStepInfo(tabId, roundId, stepKey, 5, '已在小云雀首页将页面滚至底部');
+    await scrollGeneratePageToBottom();
+    await pushRoundPhaseUi(tabId, roundId);
+    await step04_xiaoyunque_require_logged_in(ctx);
+    logStepDone(tabId, roundId, stepKey, 5, '小云雀首页就绪');
+    return;
+  }
+
+  logStepInfo(tabId, roundId, stepKey, 5, '正在导航至小云雀首页');
+  try {
+    await chrome.tabs.update(tabId, { url: XIAOYUNQUE_HOME });
+    await waitForTabUrlWhen(
+      tabId,
+      45000,
+      (u) => u.indexOf('xyq.jianying.com') !== -1 && isXiaoyunqueHomeUrl(u),
+      'XIAOYUNQUE_HOME_NAV_TIMEOUT',
+    );
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    logStepFail(
+      tabId,
+      roundId,
+      stepKey,
+      5,
+      '动作失败+无法打开小云雀首页请稍后重试',
+      m.slice(0, 500),
+    );
+    throw e;
+  }
+
+  await new Promise((r) => setTimeout(r, 400));
+  await frameworkStep03_ensurePageHelpers(ctx);
+  logStepInfo(tabId, roundId, stepKey, 5, '小云雀页滚至底部');
+  await scrollGeneratePageToBottom();
+  await pushRoundPhaseUi(tabId, roundId);
+  await step04_xiaoyunque_require_logged_in(ctx);
+  logStepDone(tabId, roundId, stepKey, 5, '已打开小云雀首页并滚底');
+}
+
 /** 设计 §4.1.2：工作台就绪（仅 hasForm 链，不切换模式/模型） */
 export async function step07_jimeng_ensure_workbench_ready(ctx) {
   await execJimengMainRunner(ctx, {
@@ -435,7 +556,11 @@ export async function step07_jimeng_ensure_workbench_ready(ctx) {
     stepKey: 'step07_jimeng_ensure_workbench_ready',
     runnerName: 'runStep07EnsureWorkbenchReady',
     mainPayload: {},
-    failUserMsg: '动作失败+即梦工作台未就绪请刷新或稍后重试',
+    failUserMsg: jimengOrXyqUserMsg(
+      ctx,
+      '动作失败+即梦工作台未就绪请刷新或稍后重试',
+      '动作失败+小云雀工作台未就绪请刷新或稍后重试',
+    ),
     startMsg: '检查工作台表单与画布是否就绪',
     doneMsg: '工作台已就绪',
   });
@@ -448,7 +573,7 @@ export async function step08_jimeng_close_open_popovers(ctx) {
     stepKey: 'step08_jimeng_close_open_popovers',
     runnerName: 'runStep08CloseOpenPopovers',
     mainPayload: {},
-    failUserMsg: '动作失败+无法关闭即梦下拉层',
+    failUserMsg: jimengOrXyqUserMsg(ctx, '动作失败+无法关闭即梦下拉层', '动作失败+无法关闭小云雀下拉层'),
     startMsg: '关闭已打开的下拉与浮层',
     doneMsg: '浮层已关闭',
   });
@@ -470,7 +595,7 @@ export async function step09_jimeng_ensure_mode_image_generation(ctx) {
 /** 视频模式：类型选择器切「视频生成」 */
 export async function step09_jimeng_video_ensure_mode_video_generation(ctx) {
   const { payload } = ctx;
-  const useXiaoyunque = isXiaoyunqueVideoEngine(payload);
+  const useXiaoyunque = isXiaoyunqueVideoCommand(ctx);
   await execJimengMainRunner(ctx, {
     nn: 9,
     stepKey: 'step09_jimeng_video_ensure_mode_video_generation',
@@ -489,7 +614,11 @@ export async function step09b_jimeng_video_ensure_reference_mode(ctx) {
     stepKey: 'step09b_jimeng_video_ensure_reference_mode',
     runnerName: 'runStep09bVideoEnsureReferenceMode',
     mainPayload: {},
-    failUserMsg: '动作失败+无法切换至全能参考模式',
+    failUserMsg: jimengOrXyqUserMsg(
+      ctx,
+      '动作失败+无法切换至全能参考模式',
+      '动作失败+小云雀无法切换至全能参考模式',
+    ),
     startMsg: '将参考模式切换为「全能参考」',
     doneMsg: '参考模式已切换',
   });
@@ -514,7 +643,7 @@ export async function step10_jimeng_ensure_model(ctx) {
 /** 视频模式：选择指定模型 */
 export async function step10_jimeng_video_ensure_model(ctx) {
   const { payload } = ctx;
-  const useXiaoyunque = isXiaoyunqueVideoEngine(payload);
+  const useXiaoyunque = isXiaoyunqueVideoCommand(ctx);
   await execJimengMainRunner(ctx, {
     nn: 10,
     stepKey: 'step10_jimeng_video_ensure_model',
@@ -523,7 +652,7 @@ export async function step10_jimeng_video_ensure_model(ctx) {
       jimengVideoModel: payloadString(payload, 'jimengVideoModel'),
       xiaoyunqueMode: useXiaoyunque ? 'long_video_2' : '',
     },
-    failUserMsg: '动作失败+无法选择即梦视频模型',
+    failUserMsg: jimengOrXyqUserMsg(ctx, '动作失败+无法选择即梦视频模型', '动作失败+无法选择小云雀视频模型'),
     startMsg: '选择请求指定的视频模型',
     doneMsg: '视频模型已选择',
   });
@@ -549,12 +678,14 @@ export async function step11_jimeng_ensure_ratio_resolution(ctx) {
 /** 视频模式：设定画面比例 */
 export async function step11_jimeng_video_ensure_ratio(ctx) {
   const { payload } = ctx;
+  const useXiaoyunque = isXiaoyunqueVideoCommand(ctx);
   await execJimengMainRunner(ctx, {
     nn: 11,
     stepKey: 'step11_jimeng_video_ensure_ratio',
     runnerName: 'runStep11VideoEnsureRatio',
     mainPayload: {
       jimengVideoRatio: payloadString(payload, 'jimengVideoRatio'),
+      xiaoyunqueMode: useXiaoyunque ? 'long_video_2' : '',
     },
     failUserMsg: '动作失败+无法设置画面比例',
     startMsg: '设置画面比例',
@@ -585,7 +716,11 @@ export async function step12_jimeng_clear_form(ctx) {
     stepKey: 'step12_jimeng_clear_form',
     runnerName: 'runStep12ClearForm',
     mainPayload: {},
-    failUserMsg: '动作失败+未找到即梦提示词区域或无法清空',
+    failUserMsg: jimengOrXyqUserMsg(
+      ctx,
+      '动作失败+未找到即梦提示词区域或无法清空',
+      '动作失败+未找到小云雀提示词区域或无法清空',
+    ),
     startMsg: '清空提示词并移除页面上已有参考图',
     doneMsg: '表单已清空',
   });
@@ -605,7 +740,7 @@ export async function step13_jimeng_paste_reference_clear_prompt(ctx) {
     stepKey,
     runnerName: 'runStep13PasteReferenceClearPrompt',
     mainPayload: { images },
-    failUserMsg: '动作失败+即梦参考图粘贴或清空失败',
+    failUserMsg: jimengOrXyqUserMsg(ctx, '动作失败+即梦参考图粘贴或清空失败', '动作失败+小云雀参考图粘贴或清空失败'),
     startMsg: '逐张粘贴参考图并再次清空提示词区',
     doneMsg: '参考图已粘贴',
   });
@@ -624,7 +759,7 @@ export async function step13b_jimeng_video_paste_reference_audio(ctx) {
     stepKey,
     runnerName: 'runStep13bVideoPasteReferenceAudio',
     mainPayload: { audios },
-    failUserMsg: '动作失败+即梦参考音频粘贴失败',
+    failUserMsg: jimengOrXyqUserMsg(ctx, '动作失败+即梦参考音频粘贴失败', '动作失败+小云雀参考音频粘贴失败'),
     startMsg: '逐个粘贴参考音频',
     doneMsg: '参考音频已粘贴',
   });
@@ -638,7 +773,7 @@ export async function step14_jimeng_fill_prompt_text(ctx) {
     stepKey: 'step14_jimeng_fill_prompt_text',
     runnerName: 'runStep14FillPromptText',
     mainPayload: { prompt: payloadString(payload, 'prompt') },
-    failUserMsg: '动作失败+无法写入即梦提示词',
+    failUserMsg: jimengOrXyqUserMsg(ctx, '动作失败+无法写入即梦提示词', '动作失败+无法写入小云雀提示词'),
     startMsg: '写入用户提示词（含占位符）',
     doneMsg: '提示词已写入',
   });
@@ -664,7 +799,11 @@ export async function step15_jimeng_expand_at_mentions(ctx) {
       prompt: payloadString(payload, 'prompt'),
       images,
     },
-    failUserMsg: '动作失败+即梦 @ 参考图或占位符校验失败',
+    failUserMsg: jimengOrXyqUserMsg(
+      ctx,
+      '动作失败+即梦 @ 参考图或占位符校验失败',
+      '动作失败+小云雀 @ 参考图或占位符校验失败',
+    ),
     startMsg: '将 (参考图片N) 展开为 @ 并选择对应参考图',
     doneMsg: '@ 引用已展开',
   });
@@ -689,7 +828,11 @@ export async function step15b_jimeng_video_expand_audio_mentions(ctx) {
       prompt: payloadString(payload, 'prompt'),
       audios,
     },
-    failUserMsg: '动作失败+即梦 @ 参考音频或占位符校验失败',
+    failUserMsg: jimengOrXyqUserMsg(
+      ctx,
+      '动作失败+即梦 @ 参考音频或占位符校验失败',
+      '动作失败+小云雀 @ 参考音频或占位符校验失败',
+    ),
     startMsg: '将 (参考音频N) 展开为 @ 并选择对应参考音频',
     doneMsg: '@ 引用已展开',
   });

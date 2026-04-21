@@ -26,6 +26,7 @@
     {
       "matches": [
         "https://jimeng.jianying.com/*",
+        "https://xyq.jianying.com/*",
         "https://gemini.google.com/*",
         "https://picpuck.com/*",
         "https://www.picpuck.com/*",
@@ -39,6 +40,7 @@
   "permissions": ["tabs", "windows", "scripting", "clipboardWrite", "clipboardRead", "storage", "alarms"],
   "host_permissions": [
     "https://jimeng.jianying.com/*",
+    "https://xyq.jianying.com/*",
     "https://gemini.google.com/*",
     "https://picpuck.com/*",
     "https://www.picpuck.com/*",
@@ -55,6 +57,7 @@
       ],
       "matches": [
         "https://jimeng.jianying.com/*",
+        "https://xyq.jianying.com/*",
         "https://gemini.google.com/*",
         "https://picpuck.com/*",
         "https://www.picpuck.com/*",

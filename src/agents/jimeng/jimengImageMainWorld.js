@@ -48,6 +48,14 @@
     return null;
   }
 
+  function isPicpuckXyqSite() {
+    try {
+      return String(location.hostname || '') === 'xyq.jianying.com';
+    } catch (e) {
+      return false;
+    }
+  }
+
   function findJimengPromptField() {
     var list = doc.querySelectorAll('[class*="prompt-editor-container"] .tiptap.ProseMirror[contenteditable="true"]');
     var i;
@@ -70,10 +78,81 @@
     return null;
   }
 
+  /**
+   * 小云雀视频主输入：以 `promptContainer-*` 为壳（与即梦 `prompt-editor-container` 分离），内层 `tiptap ProseMirror`。
+   * `data-placeholder` 在子节点 p 上，故不再强依赖 textarea placeholder。
+   */
+  function findXiaoyunqueVideoPromptField() {
+    var i;
+    var el;
+    var shell = doc.querySelector('[class*="promptContainer"]');
+    if (shell) {
+      el = shell.querySelector('.tiptap.ProseMirror[contenteditable="true"]');
+      if (el && el.offsetParent) return el;
+    }
+    var list = doc.querySelectorAll('.tiptap.ProseMirror[contenteditable="true"]');
+    for (i = 0; i < list.length; i++) {
+      el = list[i];
+      if (!el || !el.offsetParent) continue;
+      if (el.closest && el.closest('[class*="prompt-editor-sizer"]')) continue;
+      if (el.closest && (el.closest('nav') || el.closest('[class*="headerRight"]'))) continue;
+      return el;
+    }
+    var pm = doc.querySelectorAll('[contenteditable="true"][role="textbox"]');
+    for (i = 0; i < pm.length; i++) {
+      el = pm[i];
+      if (!el || !el.offsetParent) continue;
+      if (el.closest && el.closest('[class*="prompt-editor-sizer"]')) continue;
+      if (el.closest && (el.closest('nav') || el.closest('[class*="headerRight"]'))) continue;
+      return el;
+    }
+    var tas = doc.querySelectorAll('textarea');
+    for (i = 0; i < tas.length; i++) {
+      var ta = tas[i];
+      if (!ta || !ta.offsetParent) continue;
+      var ph = (ta.getAttribute('placeholder') || '').trim();
+      if (ph && /描述|创意|提示|故事|画面|脚本|输入/i.test(ph)) return ta;
+    }
+    return null;
+  }
+
+  /**
+   * 小云雀参数条：常见为 `toolbar-*` + `buttonContainer-*` + `lv-btn`，**未必**有即梦那套 `lv-select` / `toolbar-button-*`。
+   */
+  function xiaoyunqueWorkbenchChromePresent(container) {
+    if (!container || !container.offsetParent) return false;
+    if (container.querySelector('[class*="lv-select"]')) return true;
+    if (container.querySelector('[class*="toolbar-"]')) return true;
+    if (container.querySelector('[class*="buttonContainer"]')) return true;
+    if (container.querySelector('[class*="createButton"]')) return true;
+    if (container.querySelector('button.lv-btn')) return true;
+    return false;
+  }
+
+  function hasXiaoyunqueVideoWorkbenchForm() {
+    var shell = doc.querySelector('[class*="promptContainer"]');
+    if (!shell || !shell.offsetParent) return false;
+    var pe = shell.querySelector('.tiptap.ProseMirror[contenteditable="true"]');
+    if (!pe || !pe.offsetParent) return false;
+    return xiaoyunqueWorkbenchChromePresent(shell);
+  }
+
   function hasForm() {
     var pe = findJimengPromptField();
     var anySelect = doc.querySelector('[class*="lv-select-view"]') || doc.querySelector('[class*="lv-select"]');
     return !!(pe && anySelect);
+  }
+
+  function tryFocusXyqPrimaryPrompt() {
+    var pe = findXiaoyunqueVideoPromptField();
+    if (!pe) return false;
+    try {
+      if (pe.focus) pe.focus();
+      if (pe.click) pe.click();
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   function hasOpenPopover() {
@@ -499,14 +578,21 @@
   async function runStep07EnsureWorkbenchReady(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step07_jimeng_ensure_workbench_ready';
-    var step0Max = 8;
+    var xyq = isPicpuckXyqSite();
+    var step0Max = xyq ? 15 : 8;
     var step0Retries = 0;
-    while (!hasForm()) {
+    while (xyq ? !hasXiaoyunqueVideoWorkbenchForm() : !hasForm()) {
       if (step0Retries >= step0Max) {
-        appendMainLog(roundId, stepKey, 'debug', 'Step07.debug.workbenchMaxRetries=' + step0Max);
-        return { ok: false, code: 'JIMENG_WORKBENCH_NOT_READY' };
+        appendMainLog(roundId, stepKey, 'debug', 'Step07.debug.workbenchMaxRetries=' + step0Max + ' xyq=' + xyq);
+        return { ok: false, code: xyq ? 'XIAOYUNQUE_WORKBENCH_NOT_READY' : 'JIMENG_WORKBENCH_NOT_READY' };
       }
       step0Retries++;
+      if (xyq) {
+        tryFocusXyqPrimaryPrompt();
+        appendMainLog(roundId, stepKey, 'debug', 'Step07.debug.xyqWaitWorkbench retry=' + step0Retries);
+        await delay(1400);
+        continue;
+      }
       var clicked = clickImageGenerationCard();
       appendMainLog(roundId, stepKey, 'debug', 'Step07.debug.retry=' + step0Retries + ' clickCard=' + clicked);
       if (clicked) {
@@ -722,7 +808,7 @@
     var stepKey = 'step09b_jimeng_video_ensure_reference_mode';
     var retries = 0;
     while (true) {
-      var modeSelectContainer = doc.querySelector('.feature-select-LagwpK div[role="combobox"]');
+      var modeSelectContainer = doc.querySelector('[class*="feature-select"] div[role="combobox"]');
       if (!modeSelectContainer) {
         return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到参考模式下拉框' };
       }
@@ -738,7 +824,7 @@
       appendMainLog(roundId, stepKey, 'debug', 'Step09bv.debug.clickOption全能参考=' + optionClicked);
       await delay(DELAY_AFTER_OPTION);
       
-      var valElNew = doc.querySelector('.feature-select-LagwpK div[role="combobox"] .lv-select-view-value');
+      var valElNew = doc.querySelector('[class*="feature-select"] div[role="combobox"] .lv-select-view-value');
       var modeNow = valElNew ? (valElNew.innerText || '').trim() : '';
       if (modeNow.indexOf('全能参考') !== -1) {
         return { ok: true };
@@ -825,7 +911,7 @@
     
     if (!matchedOpt) {
       for (var i = 0; i < options.length; i++) {
-        var labelEl = options[i].querySelector('.option-label-Fv9c0E');
+        var labelEl = options[i].querySelector('[class*="option-label"]');
         var optText = '';
         if (labelEl) {
           var tNodes = [];
@@ -1015,6 +1101,10 @@
 
   /** @param {{ roundId: string, jimengVideoRatio?: string }} payload */
   async function runStep11VideoEnsureRatio(payload) {
+    var mode2 = payload && payload.xiaoyunqueMode ? String(payload.xiaoyunqueMode).trim() : '';
+    if (mode2 === 'long_video_2') {
+      return runStep11VideoEnsureRatioXiaoyunque(payload);
+    }
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step11_jimeng_video_ensure_ratio';
     var wantRatio = payload && payload.jimengVideoRatio && String(payload.jimengVideoRatio).trim() ? String(payload.jimengVideoRatio).trim() : '16:9';
@@ -1028,7 +1118,7 @@
       return m ? m[1] : '';
     }
     // Check if the current button already shows the desired ratio
-    var ratioBtns = doc.querySelectorAll('button.toolbar-button-mCaZcW, button[class*="toolbar-button-"]');
+    var ratioBtns = doc.querySelectorAll('button[class*="toolbar-button"]');
     var ratioBtn = null;
     for (var k = 0; k < ratioBtns.length; k++) {
       var cand = ratioBtns[k];
@@ -1127,6 +1217,155 @@
     }
     await delay(DELAY_AFTER_OPTION);
     return { ok: true };
+  }
+
+  /** @param {{ roundId: string, jimengVideoRatio?: string }} payload */
+  async function runStep11VideoEnsureRatioXiaoyunque(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step11_jimeng_video_ensure_ratio';
+    var wantRatio =
+      payload && payload.jimengVideoRatio && String(payload.jimengVideoRatio).trim()
+        ? String(payload.jimengVideoRatio).trim()
+        : '16:9';
+    var retries = 0;
+
+    function isVisible(el) {
+      if (!el) return false;
+      var st = window.getComputedStyle ? window.getComputedStyle(el) : null;
+      if (st && (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0')) return false;
+      return !!(el.offsetParent || (el.getClientRects && el.getClientRects().length));
+    }
+
+    function textNorm(s) {
+      return String(s || '').replace(/\s+/g, '').trim();
+    }
+
+    function mapRatioMenuLabel(ratio) {
+      var r = textNorm(ratio);
+      if (r === '16:9') return '16:9（横屏）';
+      if (r === '9:16') return '9:16（竖屏）';
+      if (r === '4:3') return '4:3';
+      if (r === '3:4') return '3:4';
+      return ratio || '16:9（横屏）';
+    }
+
+    function parseRatioFromMenuText(txt) {
+      var m = String(txt || '').match(/(\d+\s*:\s*\d+)/);
+      return m ? m[1].replace(/\s+/g, '') : '';
+    }
+
+    function isRatioMenuOpen() {
+      var nodes = doc.querySelectorAll('[role="menu"], [role="menuitem"], div, span');
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        if (!isVisible(n)) continue;
+        var t = textNorm(n.textContent || '');
+        if (!t) continue;
+        if (
+          t.indexOf('16:9（横屏）'.replace(/\s+/g, '')) !== -1 ||
+          t.indexOf('9:16（竖屏）'.replace(/\s+/g, '')) !== -1
+        ) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function findRatioMenuItem(labelOrRatio) {
+      var want = textNorm(labelOrRatio);
+      var items = doc.querySelectorAll('[role="menuitem"], li, button, div');
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        if (!isVisible(it)) continue;
+        var txt = textNorm(it.textContent || '');
+        if (!txt) continue;
+        if (txt.indexOf(want) !== -1) return it;
+      }
+      return null;
+    }
+
+    function findCurrentRatioTextFromToolbar() {
+      var nodes = doc.querySelectorAll('button,[role="button"],div,span');
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        if (!isVisible(n)) continue;
+        var t = String(n.textContent || '').trim();
+        var ratio = parseRatioFromMenuText(t);
+        if (ratio === '16:9' || ratio === '9:16' || ratio === '4:3' || ratio === '3:4') return ratio;
+      }
+      return '';
+    }
+
+    function findAspectRatioTriggerByProbe() {
+      // 不依赖 class：在可点击元素中逐个探测，能打开包含「16:9（横屏）/9:16（竖屏）」菜单者即为目标触发器。
+      var candidates = doc.querySelectorAll('button,[role="button"],div[tabindex],div');
+      for (var i = 0; i < candidates.length; i++) {
+        var c = candidates[i];
+        if (!isVisible(c)) continue;
+        var txt = textNorm(c.textContent || '');
+        // 跳过明显无关按钮（上传/@/模式/模型/发送）
+        if (
+          txt.indexOf('Agent模式'.replace(/\s+/g, '')) !== -1 ||
+          txt.indexOf('视频2.0'.replace(/\s+/g, '')) !== -1 ||
+          txt.indexOf('Seedance2.0'.replace(/\s+/g, '')) !== -1 ||
+          txt.indexOf('@引用素材'.replace(/\s+/g, '')) !== -1
+        ) {
+          continue;
+        }
+        try {
+          c.click();
+        } catch (e0) {}
+        var opened = isRatioMenuOpen();
+        if (opened) return c;
+      }
+      return null;
+    }
+
+    var wantLabel = mapRatioMenuLabel(wantRatio);
+    while (true) {
+      // 若菜单已开，直接选项；否则先探测触发器并打开。
+      if (!isRatioMenuOpen()) {
+        var trigger = findAspectRatioTriggerByProbe();
+        appendMainLog(roundId, stepKey, 'debug', 'Step11v.debug.findXyqAspectTrigger=' + !!trigger);
+        if (!trigger) {
+          return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到小云雀画幅比例触发器' };
+        }
+        await delay(DELAY_OPEN);
+      }
+
+      var target = findRatioMenuItem(wantLabel) || findRatioMenuItem(wantRatio);
+      appendMainLog(roundId, stepKey, 'debug', 'Step11v.debug.findXyqRatioItem=' + !!target + ',want=' + wantRatio);
+      if (!target) {
+        retries++;
+        if (retries >= 3) {
+          return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到目标画幅比例选项' };
+        }
+        await delay(600);
+        continue;
+      }
+
+      try {
+        target.scrollIntoView({ block: 'nearest' });
+      } catch (e1) {}
+      try {
+        target.click();
+      } catch (e2) {}
+      appendMainLog(roundId, stepKey, 'debug', 'Step11v.debug.clickXyqRatioItem=true');
+      await delay(DELAY_AFTER_OPTION);
+      await delay(240);
+
+      var ratioNow = findCurrentRatioTextFromToolbar();
+      if (textNorm(ratioNow) === textNorm(wantRatio)) {
+        return { ok: true };
+      }
+
+      retries++;
+      appendMainLog(roundId, stepKey, 'debug', 'Step11v.debug.xiaoyunqueRatioRetry=' + retries + ',now=' + ratioNow);
+      if (retries >= 3) {
+        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '比例切换后校验失败' };
+      }
+      await delay(600);
+    }
   }
 
   /** @param {{ roundId: string, ratioLabel?: string, resolutionLabel?: string }} payload */
@@ -3329,12 +3568,12 @@
 
     for (var ii = 0; ii < n; ii++) {
        if (ii > 0) {
-          var thumbs = doc.querySelectorAll('.lv-modal-wrapper .image-thumbnail-holder-au3bpp');
+          var thumbs = doc.querySelectorAll('.lv-modal-wrapper [class*="image-thumbnail-holder"]');
           if (thumbs && thumbs.length > ii) {
              thumbs[ii].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
              await delay(300);
           } else {
-             var arrows = doc.querySelectorAll('.lv-modal-wrapper .arrow-container-UvRNxR');
+             var arrows = doc.querySelectorAll('.lv-modal-wrapper [class*="arrow-container"]');
              if (arrows && arrows.length > 1) {
                 arrows[1].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
                 await delay(300);
@@ -3404,7 +3643,9 @@
 
     appendMainLog(roundId, stepKey, 'info', 'Step21.已通过DOM提取即梦结果图+张数=' + collected.length);
 
-    var closeBtn = doc.querySelector('.lv-modal-wrapper .lv-modal-close-icon') || doc.querySelector('.lv-modal-wrapper .icon-close-lrroeF');
+    var closeBtn =
+      doc.querySelector('.lv-modal-wrapper .lv-modal-close-icon') ||
+      doc.querySelector('.lv-modal-wrapper [class*="icon-close"]');
     if (closeBtn) {
        closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
     } else {

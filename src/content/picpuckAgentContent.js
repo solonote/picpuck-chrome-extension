@@ -99,6 +99,7 @@
       const h = String(location.hostname || '').toLowerCase();
       if (h === 'gemini.google.com') return true;
       if (h === 'jimeng.jianying.com' || h.endsWith('.jimeng.jianying.com')) return true;
+      if (h === 'xyq.jianying.com' || h.endsWith('.xyq.jianying.com')) return true;
       return false;
     } catch {
       return false;
@@ -555,24 +556,36 @@
     const stepLabelEl = center.querySelector('[data-picpuck-step-label]');
     const stepActEl = center.querySelector('[data-picpuck-step-action]');
     if (mainTitle) {
-      mainTitle.textContent = busy
-        ? 'PicPuck Agent 正在进行操作，请勿执行操作或切换窗口'
-        : 'PicPuck Agent 正在等待任务';
+      if (busy) {
+        mainTitle.textContent = 'PicPuck Agent 正在进行操作，请勿执行操作或切换窗口';
+      } else if (phase === 'error') {
+        mainTitle.textContent = 'PicPuck Agent 上一轮执行失败';
+      } else {
+        mainTitle.textContent = 'PicPuck Agent 正在等待任务';
+      }
     }
     const { step: stepNum, action: actionText } = parseStepFromLastInfo(lastInfo);
     if (stepLabelEl) {
-      if (!busy) {
-        stepLabelEl.style.display = 'none';
-      } else {
+      if (busy) {
         stepLabelEl.style.display = '';
         stepLabelEl.textContent = 'STEP ' + (stepNum != null ? String(stepNum).padStart(2, '0') : '--') + ' //';
+      } else if (phase === 'error' && stepNum != null) {
+        stepLabelEl.style.display = '';
+        stepLabelEl.textContent = 'STEP ' + String(stepNum).padStart(2, '0') + ' //';
+      } else {
+        stepLabelEl.style.display = 'none';
       }
     }
     if (stepActEl) {
-      if (!busy) {
-        stepActEl.textContent = '操作已完成，您可以离开此页面';
-      } else {
+      if (busy) {
         stepActEl.textContent = actionText || (lastInfo ? lastInfo : '—');
+      } else if (phase === 'success') {
+        stepActEl.textContent = '操作已完成，您可以离开此页面';
+      } else if (phase === 'error') {
+        stepActEl.textContent =
+          actionText || lastInfo || '执行失败，请通过左侧日志区域三击复制详情';
+      } else {
+        stepActEl.textContent = lastInfo || '—';
       }
     }
   }

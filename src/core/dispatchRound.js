@@ -240,12 +240,22 @@ export async function dispatchRound(args) {
     const cancelled =
       msg === 'ASYNC_JOB_CANCELLED' ||
       (e && typeof e === 'object' && /** @type {{ code?: string }} */ (e).code === 'ASYNC_JOB_CANCELLED');
+    /** 顶栏 lastInfoMessage 仅来自 info：把错误码压进 Step99，便于用户留在失败态时仍可见原因（须匹配 StepNN. 前缀校验） */
+    const failInfoMsg = cancelled
+      ? 'Step99.本轮结束+已取消'
+      : (() => {
+          const flat = String(msg).replace(/\s+/g, ' ').trim();
+          const base = 'Step99.本轮结束+失败+';
+          const max = 880;
+          const rest = flat.length > max - base.length ? flat.slice(0, max - base.length - 3) + '...' : flat;
+          return base + rest;
+        })();
     appendLog(tabId, {
       ts: Date.now(),
       roundId,
       step: 'system',
       level: 'info',
-      message: cancelled ? 'Step99.本轮结束+已取消' : 'Step99.本轮结束+失败',
+      message: failInfoMsg,
     });
     appendLog(tabId, {
       ts: Date.now(),
