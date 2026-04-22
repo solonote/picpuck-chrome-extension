@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PicPuck",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "PicPuck 编排：即梦 / Gemini 等站点 Agent（按设计文档分层实现）",
   "icons": {
     "16": "icons/icon-16.png",

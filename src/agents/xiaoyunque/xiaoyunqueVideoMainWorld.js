@@ -1000,7 +1000,7 @@
     var wantModel =
       payload && payload.jimengVideoModel && String(payload.jimengVideoModel).trim()
         ? String(payload.jimengVideoModel).trim()
-        : 'Seedance 2.0 VIP';
+        : '2.0 VIP';
     var retries = 0;
 
     function isVisible(el) {
@@ -1016,6 +1016,73 @@
 
     function textEq(a, b) {
       return textNorm(a) === textNorm(b);
+    }
+
+    /**
+     * 小云雀当前页：模型选中后触发器文案为「2.0」「2.0 VIP」（旧版为 Seedance 2.0 …）。
+     * 仍兼容编排下发的 Seedance 文案：去掉 Seedance 与空白后比对；Fast 语义单独对齐。
+     */
+    function xyqNormalizeVideoModelKey(s) {
+      var k = textNorm(String(s || '')).toLowerCase();
+      if (!k) return '';
+      k = k.replace(/seedance/g, '');
+      return k;
+    }
+
+    function xyqTriggerMatchesChosenModel(afterLabel, wantM) {
+      if (textEq(afterLabel, wantM)) return true;
+      var wRaw = String(wantM || '').toLowerCase();
+      var aRaw = String(afterLabel || '').toLowerCase();
+      var wantFast = wRaw.indexOf('fast') !== -1;
+      var afterFast = aRaw.indexOf('fast') !== -1;
+      if (wantFast !== afterFast) return false;
+      var wKey = xyqNormalizeVideoModelKey(wantM);
+      var aKey = xyqNormalizeVideoModelKey(afterLabel);
+      if (!wKey || !aKey) return false;
+      return wKey === aKey;
+    }
+
+    function itemRowStrictlyMatchesWantModel(item, wantM) {
+      if (!item) return false;
+      var wLo = String(wantM || '').toLowerCase();
+      var rowLo = String(item.textContent || '').toLowerCase();
+      var wantFast = wLo.indexOf('fast') !== -1;
+      var rowFast = rowLo.indexOf('fast') !== -1;
+      if (wantFast !== rowFast) return false;
+      return xyqNormalizeVideoModelKey(readModelNameFromItem(item)) === xyqNormalizeVideoModelKey(wantM);
+    }
+
+    /** 面板内模糊行：避免 want「2.0」误命中「2.0 VIP」行 */
+    function xyqPanelRowTextMatchesWant(txt, want) {
+      if (!txt || !want) return false;
+      if (txt === want) return true;
+      if (txt.indexOf(want) === -1) return false;
+      var wantLo = want.toLowerCase();
+      var txtLo = txt.toLowerCase();
+      var wantBaseOnly = wantLo === '2.0' || wantLo === 'seedance2.0';
+      if (wantBaseOnly && txtLo.indexOf('vip') !== -1) return false;
+      return true;
+    }
+
+    /** 优先读本轮已打开的触发器节点，避免页上另有「Seedance」控件时 findModelTrigger 飘到错误元素 */
+    async function waitXyqTriggerShowsModel(wantM, primaryTrigger, roundId) {
+      var deadline = Date.now() + 2800;
+      var lastAfter = '';
+      while (Date.now() < deadline) {
+        var el = primaryTrigger && primaryTrigger.isConnected ? primaryTrigger : findModelTrigger();
+        lastAfter = readXiaoyunqueTriggerModelLabel(el);
+        if (xyqTriggerMatchesChosenModel(lastAfter, wantM)) {
+          return { ok: true, after: lastAfter };
+        }
+        await delay(160);
+      }
+      appendMainLog(
+        roundId,
+        stepKey,
+        'debug',
+        'Step10v.debug.xyqModelPollExhausted lastAfter=' + String(lastAfter || '').slice(0, 80),
+      );
+      return { ok: false, after: lastAfter };
     }
 
     function modelTextFromNode(el) {
@@ -1056,8 +1123,11 @@
         if (!isVisible(n)) continue;
         var t = modelTextFromNode(n);
         if (!t) continue;
-        // 小云雀模型触发器常见值；避免依赖哈希类名
+        // 小云雀模型触发器：新版「2.0 / 2.0 VIP」，旧版 Seedance 文案仍兼容
+        var tFirst = t.split(/\r?\n/)[0].trim();
         if (
+          t.indexOf('2.0 VIP') !== -1 ||
+          tFirst === '2.0' ||
           t.indexOf('Seedance 2.0 VIP') !== -1 ||
           t.indexOf('Seedance 2.0 Fast VIP') !== -1 ||
           t.indexOf('Seedance 2.0 Fast') !== -1 ||
@@ -1078,16 +1148,24 @@
         mp = modelPanels[mi];
         if (!isVisible(mp)) continue;
         tx = textNorm(mp.textContent || '');
-        if (tx.indexOf('模型选择') !== -1 && tx.indexOf('Seedance') !== -1) return mp;
+        if (
+          tx.indexOf('模型选择') !== -1 &&
+          (tx.toLowerCase().indexOf('seedance') !== -1 || tx.indexOf('2.0') !== -1)
+        )
+          return mp;
       }
       var pops = doc.querySelectorAll('div[class*="lv-dropdown-popup-visible"], div.lv-dropdown-popup-visible');
       var pi, p;
       for (pi = 0; pi < pops.length; pi++) {
         p = pops[pi];
         if (!isVisible(p)) continue;
-        tx = textNorm(p.textContent || '');
+        tx = textNorm(p.textContent || '').toLowerCase();
         if (tx.indexOf('模型选择') !== -1) return p;
-        if (p.querySelector('[class*="option-label"]') && tx.indexOf('Seedance') !== -1) return p;
+        if (
+          p.querySelector('[class*="option-label"]') &&
+          (tx.indexOf('seedance') !== -1 || tx.indexOf('2.0') !== -1)
+        )
+          return p;
       }
       return null;
     }
@@ -1099,14 +1177,24 @@
         mp = modelPanels[mi];
         if (!isVisible(mp)) continue;
         tx = textNorm(mp.textContent || '');
-        if (tx.indexOf('模型选择') !== -1 && tx.indexOf('Seedance') !== -1) return mp;
+        if (
+          tx.indexOf('模型选择') !== -1 &&
+          (tx.toLowerCase().indexOf('seedance') !== -1 || tx.indexOf('2.0') !== -1)
+        )
+          return mp;
       }
       var title = findByText(doc.body, '模型选择', 'div,span');
       if (!title || !isVisible(title)) return null;
       var p = title;
       for (var i = 0; i < 8 && p; i++) {
         var txt = textNorm(p.textContent || '');
-        if (txt.indexOf('模型选择') !== -1 && txt.indexOf('Seedance2.0') !== -1) return p;
+        if (
+          txt.indexOf('模型选择') !== -1 &&
+          (txt.indexOf('Seedance2.0') !== -1 ||
+            txt.indexOf('2.0') !== -1 ||
+            txt.toLowerCase().indexOf('seedance') !== -1)
+        )
+          return p;
         p = p.parentElement;
       }
       return title.parentElement || title;
@@ -1161,7 +1249,7 @@
         if (!isVisible(r)) continue;
         var txt = textNorm(modelTextFromNode(r));
         if (!txt) continue;
-        if (txt === want || txt.indexOf(want) !== -1) {
+        if (xyqPanelRowTextMatchesWant(txt, want)) {
           return r.tagName === 'BUTTON' ? r : r.closest && r.closest('button,[role="button"],li,div');
         }
       }
@@ -1201,9 +1289,17 @@
           appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.clickXyqModelItemEarly=true');
           await delay(DELAY_AFTER_OPTION);
           await delay(300);
-          var triggerMid = findModelTrigger();
-          var mid = readXiaoyunqueTriggerModelLabel(triggerMid || trigger);
-          if (textEq(mid, wantModel)) {
+          var vrEarly = await waitXyqTriggerShowsModel(wantModel, trigger, roundId);
+          if (vrEarly.ok) {
+            return { ok: true };
+          }
+          if (itemRowStrictlyMatchesWantModel(itemEarly, wantModel)) {
+            appendMainLog(
+              roundId,
+              stepKey,
+              'debug',
+              'Step10v.debug.xyqEarlyTrustedRowClick after=' + String(vrEarly.after || '').slice(0, 80),
+            );
             return { ok: true };
           }
         }
@@ -1245,14 +1341,22 @@
       await delay(DELAY_AFTER_OPTION);
       await delay(300);
 
-      var triggerAfter = findModelTrigger();
-      var after = readXiaoyunqueTriggerModelLabel(triggerAfter || trigger);
-      if (textEq(after, wantModel)) {
+      var vrMain = await waitXyqTriggerShowsModel(wantModel, trigger, roundId);
+      if (vrMain.ok) {
+        return { ok: true };
+      }
+      if (itemRowStrictlyMatchesWantModel(item, wantModel)) {
+        appendMainLog(
+          roundId,
+          stepKey,
+          'debug',
+          'Step10v.debug.xyqTrustedRowClick after=' + String(vrMain.after || '').slice(0, 80),
+        );
         return { ok: true };
       }
 
       retries++;
-      appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.xiaoyunqueModelRetry=' + retries + ',after=' + after);
+      appendMainLog(roundId, stepKey, 'debug', 'Step10v.debug.xiaoyunqueModelRetry=' + retries + ',after=' + vrMain.after);
       if (retries >= 3) {
         return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '模型切换后校验失败' };
       }
@@ -1322,6 +1426,136 @@
     }
     await delay(DELAY_AFTER_OPTION);
     return { ok: true };
+  }
+
+  /**
+   * 沉浸式短片「片段时长」：仅 5s / 10s / 15s；按熔炉下发的秒数映射到最近档位。
+   * DOM：`button[class*="videoPartDurationTrigger"]` + 菜单内 `[class*="videoPartDurationLabel"]`。
+   * @param {{ roundId: string, jimengVideoDuration?: number }} payload
+   */
+  async function runStep13aXyqVideoPartDuration(payload) {
+    var roundId = payload && payload.roundId ? payload.roundId : '';
+    var stepKey = 'step13a_xiaoyunque_video_ensure_part_duration';
+
+    function isVis(el) {
+      if (!el) return false;
+      var st = window.getComputedStyle ? window.getComputedStyle(el) : null;
+      if (st && (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0')) return false;
+      return !!(el.offsetParent || (el.getClientRects && el.getClientRects().length));
+    }
+
+    function textNormLocal(s) {
+      return String(s || '').replace(/\s+/g, '').trim();
+    }
+
+    var raw = payload && typeof payload.jimengVideoDuration === 'number' ? payload.jimengVideoDuration : NaN;
+    var d = Math.floor(raw);
+    if (!Number.isFinite(d) || d <= 0) {
+      appendMainLog(roundId, stepKey, 'info', 'Step13av.info.durationNotProvided_skip');
+      return { ok: true };
+    }
+    /** ≤5s→5；>5 且 ≤10→10；>10→15（与熔炉分镜秒数档位对齐） */
+    var wantBucket = d <= 5 ? 5 : d <= 10 ? 10 : 15;
+    var wantText = wantBucket + 's';
+
+    function findPartDurationTrigger() {
+      var btns = doc.querySelectorAll('button[class*="videoPartDurationTrigger"]');
+      var i;
+      for (i = 0; i < btns.length; i++) {
+        if (isVis(btns[i])) return btns[i];
+      }
+      return null;
+    }
+
+    function readTriggerDurationText(btn) {
+      if (!btn) return '';
+      var sp = btn.querySelector('span');
+      var t = (sp && sp.textContent) || btn.textContent || '';
+      return String(t).trim();
+    }
+
+    function findMenuitemForWantText(want) {
+      var labs = doc.querySelectorAll('[class*="videoPartDurationLabel"]');
+      var i;
+      var lab;
+      var row;
+      var tx;
+      for (i = 0; i < labs.length; i++) {
+        lab = labs[i];
+        if (!isVis(lab)) continue;
+        tx = String(lab.textContent || '').trim();
+        if (textNormLocal(tx) !== textNormLocal(want) && tx !== want) continue;
+        row = lab.closest('[role="menuitem"]');
+        if (row && isVis(row)) return row;
+      }
+      return null;
+    }
+
+    var retries = 0;
+    while (true) {
+      var trigger = findPartDurationTrigger();
+      if (!trigger) {
+        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到片段时长触发按钮' };
+      }
+      var cur = readTriggerDurationText(trigger);
+      if (cur === wantText || textNormLocal(cur) === textNormLocal(wantText)) {
+        appendMainLog(roundId, stepKey, 'debug', 'Step13av.debug.already=' + wantText + ' secRaw=' + String(raw));
+        return { ok: true };
+      }
+
+      var opened = clickWhenVisible(function () {
+        return trigger;
+      });
+      appendMainLog(roundId, stepKey, 'debug', 'Step13av.debug.openPartDuration=' + opened);
+      if (!opened) {
+        retries++;
+        if (retries >= 4) {
+          return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '无法点击片段时长按钮' };
+        }
+        await delay(500);
+        continue;
+      }
+      await delay(DELAY_OPEN);
+
+      var mi = findMenuitemForWantText(wantText);
+      appendMainLog(roundId, stepKey, 'debug', 'Step13av.debug.menuitem=' + !!mi + ' want=' + wantText);
+      if (!mi) {
+        retries++;
+        try {
+          doc.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+        } catch (eEsc) {}
+        await delay(400);
+        if (retries >= 4) {
+          return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '片段时长菜单中无目标选项' };
+        }
+        continue;
+      }
+      try {
+        mi.scrollIntoView({ block: 'nearest' });
+      } catch (e0) {}
+      try {
+        mi.click();
+      } catch (e1) {}
+      try {
+        mi.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        mi.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        mi.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      } catch (e2) {}
+      appendMainLog(roundId, stepKey, 'debug', 'Step13av.debug.clicked=' + wantText);
+      await delay(DELAY_AFTER_OPTION);
+
+      var trigger2 = findPartDurationTrigger();
+      var after = readTriggerDurationText(trigger2 || trigger);
+      if (after === wantText || textNormLocal(after) === textNormLocal(wantText)) {
+        return { ok: true };
+      }
+      retries++;
+      appendMainLog(roundId, stepKey, 'debug', 'Step13av.debug.verifyRetry after=' + after + ' want=' + wantText);
+      if (retries >= 4) {
+        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '片段时长切换后校验失败' };
+      }
+      await delay(500);
+    }
   }
 
   /** @param {{ roundId: string, jimengVideoRatio?: string }} payload */
@@ -1442,6 +1676,8 @@
           txt.indexOf('Agent模式') !== -1 ||
           txt.indexOf('视频2.0') !== -1 ||
           txt.indexOf('Seedance2.0') !== -1 ||
+          txt.indexOf('2.0vip') !== -1 ||
+          txt === '2.0' ||
           txt.indexOf('@引用素材') !== -1
         ) {
           continue;
@@ -2177,7 +2413,7 @@
     return { ok: true };
   }
 
-  /** 小云雀视频工作台不支持参考音色 @ 选择；保留函数签名供遗留步骤结构调用 */
+  /** 小云雀不支持参考音色/音频 @ 选择；编排已不在此链路调用 step15b */
   async function clickXyqMaterialCitationPickAudio(_audioNum, _rootPopup) {
     return false;
   }
@@ -4246,6 +4482,7 @@
     runStep10VideoEnsureModel: runStep10VideoEnsureModel,
     runStep11VideoEnsureRatio: runStep11VideoEnsureRatio,
     runStep11bVideoEnsureDuration: runStep11bVideoEnsureDuration,
+    runStep13aXyqVideoPartDuration: runStep13aXyqVideoPartDuration,
     runStep11EnsureRatioResolution: runStep11EnsureRatioResolution,
     runStep12ClearForm: runStep12ClearForm,
     runStep13PasteReferenceClearPrompt: runStep13PasteReferenceClearPrompt,

@@ -1,7 +1,7 @@
 {
   "name": "picpuck-chrome-extension",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.5",
   "description": "PicPuck 受控 Chrome 扩展（core / agents 分层）",
   "type": "module",
   "scripts": {

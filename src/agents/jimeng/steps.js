@@ -36,7 +36,7 @@ function isXiaoyunqueVideoCommand(ctx) {
   return !!(ctx && ctx.command === 'XIAOYUNQUE_VIDEO_FILL');
 }
 
-/** 小云雀不支持参考音色：去掉占位后再写入提示词，避免残留无效片段 */
+/** 小云雀工作台不支持参考音色/参考音频占位：去掉后再写入提示词，避免无效片段 */
 function stripXiaoyunqueVoicePlaceholdersInPrompt(prompt) {
   if (typeof prompt !== 'string') return '';
   var s = prompt
@@ -768,6 +768,22 @@ export async function step11b_jimeng_video_ensure_duration(ctx) {
     failUserMsg: '动作失败+无法设置生成时长',
     startMsg: '设置视频生成时长',
     doneMsg: '生成时长已设置',
+  });
+}
+
+/** 小云雀沉浸式短片：片段时长（5s/10s/15s），须在写入提示词前完成 */
+export async function step13a_xiaoyunque_video_ensure_part_duration(ctx) {
+  const { payload } = ctx;
+  await execJimengOrXyqVideoWorkbenchRunner(ctx, {
+    nn: 13,
+    stepKey: 'step13a_xiaoyunque_video_ensure_part_duration',
+    runnerName: 'runStep13aXyqVideoPartDuration',
+    mainPayload: {
+      jimengVideoDuration: payload && typeof payload.jimengVideoDuration === 'number' ? payload.jimengVideoDuration : undefined,
+    },
+    failUserMsg: '动作失败+无法设置小云雀片段时长',
+    startMsg: '按分镜时长选择片段时长（5s/10s/15s）',
+    doneMsg: '片段时长已设置',
   });
 }
 
