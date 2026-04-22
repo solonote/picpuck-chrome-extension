@@ -713,11 +713,14 @@
 
   /** @param {{ roundId: string }} payload */
   async function runStep09VideoEnsureModeVideoGeneration(payload) {
-    return runStep09VideoEnsureModeXiaoyunqueLongVideo(payload);
+    return runStep09VideoEnsureModeXiaoyunqueImmersiveShort(payload);
   }
 
-  /** 小云雀：点击「视频 2.0 / Agent 模式」触发器后，选择「智能长视频 2.0」（仅做这一段切换）；已选芯片含该文案则跳过。 */
-  async function runStep09VideoEnsureModeXiaoyunqueLongVideo(payload) {
+  /**
+   * 小云雀：打开「选择创作模式」下拉（triggerLabel / selectedTag 上的入口），选择「沉浸式短片」；
+   * 已选芯片含该文案则跳过。
+   */
+  async function runStep09VideoEnsureModeXiaoyunqueImmersiveShort(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step09_jimeng_video_ensure_mode_video_generation';
     var retries = 0;
@@ -746,8 +749,8 @@
       return null;
     }
 
-    /** 小云雀新版：模式入口在 triggerButton / selectedTag 上，不能只 closest 到巨大 div 否则 click 不弹层 */
-    function findModeTriggerVideo20() {
+    /** 小云雀：创作模式入口在 triggerButton / selectedTag / lv-dropdown 触发区 */
+    function findXyqCreationModeMenuTrigger() {
       var labs = doc.querySelectorAll('[class*="triggerLabel"], [class*="tagLabel"]');
       var i;
       var lab;
@@ -757,7 +760,17 @@
         lab = labs[i];
         if (!isVisible(lab)) continue;
         tn = textNorm(lab.textContent || '');
-        if (tn.indexOf('Agent模式') === -1 && tn.indexOf('视频2.0') === -1 && tn.indexOf('视频20') === -1) continue;
+        if (
+          tn.indexOf('Agent模式') === -1 &&
+          tn.indexOf('视频2.0') === -1 &&
+          tn.indexOf('视频20') === -1 &&
+          tn.indexOf('沉浸式短片') === -1 &&
+          tn.indexOf('智能长视频') === -1 &&
+          tn.indexOf('短剧') === -1 &&
+          tn.indexOf('生成图片') === -1
+        ) {
+          continue;
+        }
         host = lab.closest('[class*="triggerButton"]');
         if (host && isVisible(host)) return host;
         host = lab.closest('[class*="selectedTag"]');
@@ -765,41 +778,42 @@
       }
       var label =
         findByTextContainsNormalized(doc.body, '视频2.0', 'span,div,button') ||
-        findByTextContainsNormalized(doc.body, 'Agent模式', 'span,div,button');
+        findByTextContainsNormalized(doc.body, 'Agent模式', 'span,div,button') ||
+        findByTextContainsNormalized(doc.body, '沉浸式短片', 'span,div,button') ||
+        findByTextContainsNormalized(doc.body, '智能长视频', 'span,div,button');
       if (!label) return null;
       host = label.closest('[class*="triggerButton"]') || label.closest('[class*="selectedTag"]');
+      if (host && isVisible(host)) return host;
+      host = label.closest('[class*="lv-dropdown"],[class*="lv-trigger"]');
       if (host && isVisible(host)) return host;
       var clickable = label.closest ? label.closest('button,[role="button"],div') : null;
       if (!clickable || !isVisible(clickable)) return label;
       return clickable;
     }
 
-    /** 已选模式条（如 selectedTag）里已是「智能长视频 2.0」则无需再点开下拉 */
-    function isAlreadyLongVideo20InSelectedChips() {
+    /** 已选模式条里已是「沉浸式短片」则无需再点开下拉 */
+    function isAlreadyImmersiveShortInSelectedChips() {
       var chips = doc.querySelectorAll('[class*="selectedTag"]');
       var i;
       for (i = 0; i < chips.length; i++) {
         var el = chips[i];
         if (!isVisible(el)) continue;
         var got = textNorm(el.textContent || '');
-        if (got.indexOf('智能长视频2.0') !== -1) return true;
+        if (got.indexOf('沉浸式短片') !== -1) return true;
       }
       return false;
     }
 
-    function matchesLongVideoMenuLabel(got) {
+    function matchesImmersiveShortMenuLabel(got) {
       got = textNorm(got);
       if (!got) return false;
-      if (got.indexOf('智能长视频2.0') !== -1) return true;
-      if (got.indexOf('智能长视频') !== -1 && got.indexOf('2.0') !== -1) return true;
-      return false;
+      return got.indexOf('沉浸式短片') !== -1;
     }
 
     /**
-     * 小云雀「选择创作模式」面板：挂在 span.lv-dropdown 内，类名为 dropdownPanel-xxx / dropdownItem-xxx，
-     * 与 lv-dropdown-popup-visible 不是同一套 DOM，必须在 [class*="dropdownText"] 上匹配后再点整行。
+     * 「选择创作模式」面板：`dropdownPanel-*` / `dropdownItem-*`，在 `[class*="dropdownText"]` 上匹配标题后点整行。
      */
-    function findLongVideoRowInXiaoyunqueModePanel() {
+    function findImmersiveShortRowInXyqModePanel() {
       var titleSpans = doc.querySelectorAll('[class*="dropdownText"]');
       var i;
       var sp;
@@ -810,8 +824,7 @@
         if (!isVisible(sp)) continue;
         got = textNorm(sp.textContent || '');
         if (!got || got.length > 48) continue;
-        if (!matchesLongVideoMenuLabel(got)) continue;
-        if (got.indexOf('2.0') === -1) continue;
+        if (!matchesImmersiveShortMenuLabel(got)) continue;
         row = sp.closest('[class*="dropdownItem"]');
         if (row && isVisible(row)) return row;
       }
@@ -830,9 +843,9 @@
       } catch (e1) {}
     }
 
-    /** 仅在已展开的下拉 / listbox 内找项；子节点不要求单独 isVisible（避免弹层内项被误判） */
-    function findLongVideoOptionInOpenMenus() {
-      var fromXyq = findLongVideoRowInXiaoyunqueModePanel();
+    /** 仅在已展开的下拉 / listbox 内找「沉浸式短片」行 */
+    function findImmersiveShortOptionInOpenMenus() {
+      var fromXyq = findImmersiveShortRowInXyqModePanel();
       if (fromXyq) return fromXyq;
 
       var roots = doc.querySelectorAll(
@@ -854,7 +867,7 @@
           el = list[j];
           got = textNorm(el.textContent || '');
           if (!got || got.length > 120) continue;
-          if (!matchesLongVideoMenuLabel(got)) continue;
+          if (!matchesImmersiveShortMenuLabel(got)) continue;
           row =
             (el.closest && el.closest('[class*="dropdownItem"],[role="menuitem"],[role="option"],li,button')) ||
             el;
@@ -886,8 +899,8 @@
       }
     }
 
-    if (isAlreadyLongVideo20InSelectedChips()) {
-      appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.skipAlready智能长视频2.0');
+    if (isAlreadyImmersiveShortInSelectedChips()) {
+      appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.skipAlready沉浸式短片');
       return { ok: true };
     }
 
@@ -895,9 +908,9 @@
     var MODE_MENU_POLL_STEP = 140;
 
     while (true) {
-      var trigger = findModeTriggerVideo20();
+      var trigger = findXyqCreationModeMenuTrigger();
       if (!trigger) {
-        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到「视频 2.0」模式触发器' };
+        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到创作模式触发器' };
       }
       appendMainLog(
         roundId,
@@ -911,7 +924,7 @@
       var opt = null;
       var deadline = Date.now() + MODE_MENU_POLL_MS;
       while (Date.now() < deadline) {
-        opt = findLongVideoOptionInOpenMenus();
+        opt = findImmersiveShortOptionInOpenMenus();
         if (opt) break;
         await delay(MODE_MENU_POLL_STEP);
       }
@@ -921,16 +934,16 @@
           opt.scrollIntoView({ block: 'nearest' });
         } catch (e1) {}
         clickRowPreferRealEvents(opt);
-        appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.clickModeOption智能长视频2.0=true');
+        appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.clickModeOption沉浸式短片=true');
         await delay(DELAY_AFTER_OPTION);
         return { ok: true };
       }
 
-      appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.longVideoMenuNotFoundAfterPoll');
+      appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.immersiveShortMenuNotFoundAfterPoll');
       retries++;
-      appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.longVideoOptionRetry=' + retries);
+      appendMainLog(roundId, stepKey, 'debug', 'Step09v.debug.immersiveShortOptionRetry=' + retries);
       if (retries >= 3) {
-        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到「智能长视频 2.0」选项' };
+        return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到「沉浸式短片」选项' };
       }
       try {
         doc.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
@@ -1016,7 +1029,7 @@
     /** 新版小云雀：模型在 `triggerLabel-*` 上，避免整颗 trigger 含 SVG path 导致 modelTextFromNode 失真 */
     function readXiaoyunqueTriggerModelLabel(triggerEl) {
       if (!triggerEl || !triggerEl.querySelector) return modelTextFromNode(triggerEl);
-      var lab = triggerEl.querySelector('[class*="triggerLabel"]');
+      var lab = triggerEl.querySelector('[class*="triggerValue"], [class*="triggerLabel"]');
       if (lab) {
         var s = (lab.textContent || '').trim().split(/\r?\n/)[0].trim();
         if (s) return s;
@@ -1025,13 +1038,14 @@
     }
 
     function findModelTrigger() {
-      var labels = doc.querySelectorAll('[class*="triggerLabel"]');
+      var labels = doc.querySelectorAll('[class*="triggerValue"], [class*="triggerLabel"]');
       var li, lab, host, tn;
       for (li = 0; li < labels.length; li++) {
         lab = labels[li];
         if (!isVisible(lab)) continue;
         tn = (lab.textContent || '').trim().split(/\r?\n/)[0].trim();
-        if (!tn || tn.indexOf('Seedance') === -1) continue;
+        if (!tn) continue;
+        if (tn.indexOf('Seedance') === -1 && tn.indexOf('2.0') === -1) continue;
         host = lab.closest('[class*="triggerButton"]');
         while (host && !isVisible(host)) host = host.parentElement;
         if (host && isVisible(host)) return host;
@@ -1046,7 +1060,9 @@
         if (
           t.indexOf('Seedance 2.0 VIP') !== -1 ||
           t.indexOf('Seedance 2.0 Fast VIP') !== -1 ||
-          t.indexOf('Seedance 2.0 Fast') !== -1
+          t.indexOf('Seedance 2.0 Fast') !== -1 ||
+          t.indexOf('Seedance 2.0') !== -1 ||
+          t.indexOf('2.0 Fast') !== -1
         ) {
           return n.tagName === 'BUTTON' ? n : n.closest && n.closest('button,[role="button"],div');
         }
@@ -1735,7 +1751,7 @@
   }
 
   /**
-   * 智能长视频 2.0：`fileListCompact-*` 内已上传缩略图，逐一点 `removeButton-*`（排除 `@` 的 mentionButton）。
+   * 小云雀工作台：`fileListCompact-*` 内已上传缩略图，逐一点 `removeButton-*`（排除 `@` 的 mentionButton）。
    */
   function pickNextXyqCompactAttachmentRemoveButton() {
     var root = doc.querySelector('[class*="fileListCompact"]');

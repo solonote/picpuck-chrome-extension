@@ -666,9 +666,9 @@ export async function step09_jimeng_video_ensure_mode_video_generation(ctx) {
     stepKey: 'step09_jimeng_video_ensure_mode_video_generation',
     runnerName: 'runStep09VideoEnsureModeVideoGeneration',
     mainPayload: {},
-    failUserMsg: useXiaoyunque ? '动作失败+无法切换到智能长视频 2.0 模式' : '动作失败+无法切换到视频生成模式',
-    startMsg: useXiaoyunque ? '切换到小云雀「智能长视频 2.0」模式' : '将生成类型切换为「视频生成」',
-    doneMsg: useXiaoyunque ? '已切换到智能长视频 2.0 模式' : '已处于视频生成模式',
+    failUserMsg: useXiaoyunque ? '动作失败+无法切换到沉浸式短片模式' : '动作失败+无法切换到视频生成模式',
+    startMsg: useXiaoyunque ? '切换到小云雀「沉浸式短片」创作模式' : '将生成类型切换为「视频生成」',
+    doneMsg: useXiaoyunque ? '已切换到沉浸式短片模式' : '已处于视频生成模式',
   });
 }
 
