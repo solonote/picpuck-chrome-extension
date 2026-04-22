@@ -1052,7 +1052,7 @@
       return xyqNormalizeVideoModelKey(readModelNameFromItem(item)) === xyqNormalizeVideoModelKey(wantM);
     }
 
-    /** 面板内模糊行：避免 want「2.0」误命中「2.0 VIP」行 */
+    /** 面板内模糊行：避免 want「2.0」误命中「2.0 VIP / 2.0 Fast」行 */
     function xyqPanelRowTextMatchesWant(txt, want) {
       if (!txt || !want) return false;
       if (txt === want) return true;
@@ -1060,7 +1060,7 @@
       var wantLo = want.toLowerCase();
       var txtLo = txt.toLowerCase();
       var wantBaseOnly = wantLo === '2.0' || wantLo === 'seedance2.0';
-      if (wantBaseOnly && txtLo.indexOf('vip') !== -1) return false;
+      if (wantBaseOnly && (txtLo.indexOf('vip') !== -1 || txtLo.indexOf('fast') !== -1)) return false;
       return true;
     }
 
