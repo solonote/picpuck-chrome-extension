@@ -36,6 +36,16 @@ function isXiaoyunqueVideoCommand(ctx) {
   return !!(ctx && ctx.command === 'XIAOYUNQUE_VIDEO_FILL');
 }
 
+/** 小云雀不支持参考音色：去掉占位后再写入提示词，避免残留无效片段 */
+function stripXiaoyunqueVoicePlaceholdersInPrompt(prompt) {
+  if (typeof prompt !== 'string') return '';
+  var s = prompt
+    .replace(/\(参考音色<占位符>\d+\)/g, '')
+    .replace(/\(参考音频\d+\)/g, '')
+    .replace(/\(参考音色\d+\)/g, '');
+  return s.replace(/\s{2,}/g, ' ').trim();
+}
+
 function jimengOrXyqUserMsg(ctx, jimengMsg, xyqMsg) {
   return isXiaoyunqueVideoCommand(ctx) ? xyqMsg : jimengMsg;
 }
@@ -820,11 +830,15 @@ export async function step13b_jimeng_video_paste_reference_audio(ctx) {
 /** 写入用户提示词（含占位符文案） */
 export async function step14_jimeng_fill_prompt_text(ctx) {
   const { payload } = ctx;
+  let prompt = payloadString(payload, 'prompt');
+  if (isXiaoyunqueVideoCommand(ctx)) {
+    prompt = stripXiaoyunqueVoicePlaceholdersInPrompt(prompt);
+  }
   await execJimengOrXyqVideoWorkbenchRunner(ctx, {
     nn: 14,
     stepKey: 'step14_jimeng_fill_prompt_text',
     runnerName: 'runStep14FillPromptText',
-    mainPayload: { prompt: payloadString(payload, 'prompt') },
+    mainPayload: { prompt },
     failUserMsg: jimengOrXyqUserMsg(ctx, '动作失败+无法写入即梦提示词', '动作失败+无法写入小云雀提示词'),
     startMsg: '写入用户提示词（含占位符）',
     doneMsg: '提示词已写入',

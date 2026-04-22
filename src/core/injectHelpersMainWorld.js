@@ -119,7 +119,62 @@
       }
       return out;
     },
+    /** 小云雀 xyq.jianying.com 工作台：`inputContainer` / `promptContainer` 内附件与参考槽 */
+    collectXyqWorkbenchFileInputs: function (doc) {
+      var seen = {};
+      var out = [];
+      function consider(inp) {
+        if (!inp || seen[inp]) return;
+        seen[inp] = 1;
+        out.push(inp);
+      }
+      var shells = doc.querySelectorAll('[class*="inputContainer"], [class*="promptContainer"]');
+      var si;
+      var sh;
+      var j;
+      var inps;
+      for (si = 0; si < shells.length; si++) {
+        sh = shells[si];
+        if (!sh) continue;
+        inps = sh.querySelectorAll('[class*="reference-group"] input[type="file"]');
+        for (j = 0; j < inps.length; j++) consider(inps[j]);
+        inps = sh.querySelectorAll(
+          '[class*="attachmentsBar"] input[type="file"], [class*="fileUploaderWrapper"] input[type="file"], [class*="uploadInputArea"] input[type="file"]',
+        );
+        for (j = 0; j < inps.length; j++) consider(inps[j]);
+      }
+      return out;
+    },
     jimengPasteBrief: function (dataUrlStr, blob, file) {
+      var magic = 'n/a';
+      if (dataUrlStr && typeof dataUrlStr === 'string') {
+        var dm = dataUrlStr.match(/^data:[^;]+;base64,(.+)$/);
+        if (dm && dm[1]) {
+          var chunk = dm[1].replace(/\s/g, '').slice(0, 12);
+          try {
+            var bin = atob(chunk);
+            var hex = [];
+            for (var hi = 0; hi < Math.min(8, bin.length); hi++) {
+              hex.push(('0' + (bin.charCodeAt(hi) & 0xff).toString(16)).slice(-2));
+            }
+            magic = hex.join('');
+          } catch (eh) {
+            magic = '?';
+          }
+        }
+      }
+      return (
+        'mime=' +
+        (blob && blob.type ? blob.type : '?') +
+        ' bytes=' +
+        (blob ? blob.size : 0) +
+        ' file=' +
+        (file ? file.name : '?') +
+        ' magic8=' +
+        magic
+      );
+    },
+    xyqPasteBrief: function (dataUrlStr, blob, file) {
       var magic = 'n/a';
       if (dataUrlStr && typeof dataUrlStr === 'string') {
         var dm = dataUrlStr.match(/^data:[^;]+;base64,(.+)$/);

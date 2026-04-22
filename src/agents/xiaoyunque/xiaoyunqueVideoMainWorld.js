@@ -1,6 +1,7 @@
 /**
- * 小云雀视频（xyq.jianying.com）：MAIN 世界业务脚本。
- * 与即梦 `jimengImageMainWorld.js` 完全分离；由 SW `executeScript` 注入；通过 `postMessage` 写日志。
+ * 小云雀视频（xyq.jianying.com）：MAIN 世界业务脚本，与即梦页内脚本文件分离注入。
+ * 「素材引用」@ 下拉、参考图 file 槽等仅实现小云雀 DOM，不回落到即梦选择器。
+ * 由 SW `executeScript` 注入；通过 `postMessage` 写日志。
  *
  * DOM：禁止写死 CSS Modules 哈希类名。优先稳定文案、role、data-*；若用 class 子串，仅用可预期的语义前缀。
  */
@@ -52,41 +53,26 @@
     }
   }
 
-  function findXiaoyunqueVideoPromptField() {
-    var list = doc.querySelectorAll('[class*="prompt-editor-container"] .tiptap.ProseMirror[contenteditable="true"]');
-    var i;
-    var el;
-    for (i = 0; i < list.length; i++) {
-      el = list[i];
-      if (!el || !el.offsetParent) continue;
-      if (el.closest && el.closest('[class*="prompt-editor-sizer"]')) continue;
-      return el;
-    }
-    var pm = doc.querySelectorAll('.tiptap.ProseMirror[contenteditable="true"][role="textbox"]');
-    for (i = 0; i < pm.length; i++) {
-      el = pm[i];
-      if (!el || !el.offsetParent) continue;
-      if (el.closest && el.closest('[class*="prompt-editor-sizer"]')) continue;
-      return el;
-    }
-    var ta = doc.querySelector('textarea[class*="lv-textarea"], textarea[placeholder*="描述"], [class*="prompt-container"] textarea');
-    if (ta && ta.offsetParent) return ta;
-    return null;
-  }
-
   /**
-   * 小云雀视频主输入：以 `promptContainer-*` 为壳（与即梦 `prompt-editor-container` 分离），内层 `tiptap ProseMirror`。
-   * `data-placeholder` 在子节点 p 上，故不再强依赖 textarea placeholder。
+   * 小云雀视频主输入：`inputContainer-*`（含附件栏+TipTap）或 `promptContainer-*`。
+   * `data-placeholder` 常在子节点 `p` 上（如「描述你的想法，可用@指定素材…」）。
    */
   function findXiaoyunqueVideoPromptField() {
     var i;
     var el;
-    var shell = doc.querySelector('[class*="promptContainer"]');
+    var shell = doc.querySelector('[class*="inputContainer"]') || doc.querySelector('[class*="promptContainer"]');
     if (shell) {
       el = shell.querySelector('.tiptap.ProseMirror[contenteditable="true"]');
       if (el && el.offsetParent) return el;
     }
     var list = doc.querySelectorAll('.tiptap.ProseMirror[contenteditable="true"]');
+    for (i = 0; i < list.length; i++) {
+      el = list[i];
+      if (!el || !el.offsetParent) continue;
+      if (el.closest && el.closest('[class*="prompt-editor-sizer"]')) continue;
+      if (el.closest && (el.closest('nav') || el.closest('[class*="headerRight"]'))) continue;
+      if (el.closest && (el.closest('[class*="inputContainer"]') || el.closest('[class*="promptContainer"]'))) return el;
+    }
     for (i = 0; i < list.length; i++) {
       el = list[i];
       if (!el || !el.offsetParent) continue;
@@ -126,11 +112,13 @@
   }
 
   function hasXiaoyunqueVideoWorkbenchForm() {
-    var shell = doc.querySelector('[class*="promptContainer"]');
+    var shell = doc.querySelector('[class*="inputContainer"]') || doc.querySelector('[class*="promptContainer"]');
     if (!shell || !shell.offsetParent) return false;
     var pe = shell.querySelector('.tiptap.ProseMirror[contenteditable="true"]');
     if (!pe || !pe.offsetParent) return false;
-    return xiaoyunqueWorkbenchChromePresent(shell);
+    if (xiaoyunqueWorkbenchChromePresent(shell)) return true;
+    var par = shell.parentElement;
+    return !!(par && xiaoyunqueWorkbenchChromePresent(par));
   }
 
   function hasForm() {
@@ -139,16 +127,66 @@
     return !!(pe && anySelect);
   }
 
-  function tryFocusXyqPrimaryPrompt() {
-    var pe = findXiaoyunqueVideoPromptField();
-    if (!pe) return false;
+  /** 将选区落到主编辑区首段末尾，便于后续 paste / insertText（对齐即梦行为）。 */
+  function placeCaretInXyqProseMirror(pm) {
+    if (!pm || !pm.querySelector) return;
     try {
-      if (pe.focus) pe.focus();
-      if (pe.click) pe.click();
+      pm.focus();
+      var p = pm.querySelector('p');
+      if (!p) {
+        if (pm.click) pm.click();
+        return;
+      }
+      var range = document.createRange();
+      range.selectNodeContents(p);
+      range.collapse(false);
+      var sel = window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  /**
+   * 焦点进入 `inputContainer` / `promptContainer` 内的 TipTap（可点 `editorContent` 再 focus），供 Step12/13/13b/14 与 Step07 轮询。
+   * @param {Element | null} pm
+   * @returns {boolean}
+   */
+  function focusXyqVideoPromptEditorOn(pm) {
+    if (!pm) return false;
+    try {
+      var ec = pm.closest('[class*="editorContent"]');
+      if (ec && ec !== pm) {
+        try {
+          ec.dispatchEvent(
+            new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, view: window, buttons: 1 }),
+          );
+          ec.dispatchEvent(
+            new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true, view: window, buttons: 0 }),
+          );
+        } catch (eM) {
+          /* ignore */
+        }
+        try {
+          if (ec.click) ec.click();
+        } catch (eC) {
+          /* ignore */
+        }
+      }
+      if (pm.focus) pm.focus();
+      if (pm.click) pm.click();
+      placeCaretInXyqProseMirror(pm);
       return true;
     } catch (e) {
       return false;
     }
+  }
+
+  function tryFocusXyqPrimaryPrompt() {
+    return focusXyqVideoPromptEditorOn(findXiaoyunqueVideoPromptField());
   }
 
   function hasOpenPopover() {
@@ -322,7 +360,7 @@
     var ta = doc.querySelector('textarea[class*="lv-textarea"], [class*="prompt-container"] textarea');
     if (ta) ta.click();
     var pe = findXiaoyunqueVideoPromptField();
-    if (pe && pe.click) pe.click();
+    if (pe) focusXyqVideoPromptEditorOn(pe);
   }
 
   function clickImageGenerationCard() {
@@ -382,8 +420,16 @@
     }
     var ta = findXiaoyunqueVideoPromptField();
     if (ta && ta.offsetParent) {
-      ta.focus();
-      if (ta.click) ta.click();
+      if (ta.tagName === 'TEXTAREA') {
+        try {
+          ta.focus();
+        } catch (eTf) {
+          /* ignore */
+        }
+        if (ta.click) ta.click();
+      } else {
+        focusXyqVideoPromptEditorOn(ta);
+      }
       return;
     }
     var ph = doc.querySelector('[class*="empty-placeholder"]');
@@ -1297,30 +1343,49 @@
       return m ? m[1].replace(/\s+/g, '') : '';
     }
 
+    /** 新版 UI：下拉层含 ratioDropList / ratioItemText，比扫全页文案可靠 */
     function isRatioMenuOpen() {
-      var nodes = doc.querySelectorAll('[role="menu"], [role="menuitem"], div, span');
-      for (var i = 0; i < nodes.length; i++) {
-        var n = nodes[i];
-        if (!isVisible(n)) continue;
-        var t = textNorm(n.textContent || '');
-        if (!t) continue;
-        if (
-          t.indexOf('16:9（横屏）'.replace(/\s+/g, '')) !== -1 ||
-          t.indexOf('9:16（竖屏）'.replace(/\s+/g, '')) !== -1
-        ) {
-          return true;
-        }
+      var roots = doc.querySelectorAll('[class*="ratioDropList"], [class*="ratioMenu"]');
+      var ri;
+      var r;
+      for (ri = 0; ri < roots.length; ri++) {
+        r = roots[ri];
+        if (!isVisible(r)) continue;
+        if (r.querySelector('[class*="ratioItem"], [class*="ratioItemText"], [role="menuitem"]')) return true;
       }
       return false;
     }
 
     function findRatioMenuItem(labelOrRatio) {
       var want = textNorm(labelOrRatio);
-      var items = doc.querySelectorAll('[role="menuitem"], li, button, div');
-      for (var i = 0; i < items.length; i++) {
-        var it = items[i];
+      var roots = doc.querySelectorAll('[class*="ratioDropList"], [class*="ratioMenu"]');
+      var mi;
+      var m;
+      var items;
+      var j;
+      var it;
+      var txt;
+      var row;
+      for (mi = 0; mi < roots.length; mi++) {
+        m = roots[mi];
+        if (!isVisible(m)) continue;
+        items = m.querySelectorAll('[role="menuitem"], [class*="ratioItem"]');
+        for (j = 0; j < items.length; j++) {
+          it = items[j];
+          if (!isVisible(it)) continue;
+          txt = textNorm(it.textContent || '');
+          if (!txt) continue;
+          if (txt.indexOf(want) !== -1) {
+            row = it.closest('[role="menuitem"]') || it;
+            return row;
+          }
+        }
+      }
+      var fallback = doc.querySelectorAll('[role="menuitem"], li, button, div');
+      for (var i = 0; i < fallback.length; i++) {
+        it = fallback[i];
         if (!isVisible(it)) continue;
-        var txt = textNorm(it.textContent || '');
+        txt = textNorm(it.textContent || '');
         if (!txt) continue;
         if (txt.indexOf(want) !== -1) return it;
       }
@@ -1339,40 +1404,62 @@
       return '';
     }
 
+    /** DOM：`div.trigger-* aspect-ratio-trigger`（文案少，探测式扫描会点到错误 div） */
+    function findXyqAspectRatioTriggerDirect() {
+      var nodes = doc.querySelectorAll('[class*="aspect-ratio-trigger"], [class*="aspectRatioTrigger"]');
+      var i;
+      var n;
+      for (i = 0; i < nodes.length; i++) {
+        n = nodes[i];
+        if (isVisible(n)) return n;
+      }
+      return null;
+    }
+
     function findAspectRatioTriggerByProbe() {
-      // 不依赖 class：在可点击元素中逐个探测，能打开包含「16:9（横屏）/9:16（竖屏）」菜单者即为目标触发器。
       var candidates = doc.querySelectorAll('button,[role="button"],div[tabindex],div');
       for (var i = 0; i < candidates.length; i++) {
         var c = candidates[i];
         if (!isVisible(c)) continue;
         var txt = textNorm(c.textContent || '');
-        // 跳过明显无关按钮（上传/@/模式/模型/发送）
         if (
-          txt.indexOf('Agent模式'.replace(/\s+/g, '')) !== -1 ||
-          txt.indexOf('视频2.0'.replace(/\s+/g, '')) !== -1 ||
-          txt.indexOf('Seedance2.0'.replace(/\s+/g, '')) !== -1 ||
-          txt.indexOf('@引用素材'.replace(/\s+/g, '')) !== -1
+          txt.indexOf('Agent模式') !== -1 ||
+          txt.indexOf('视频2.0') !== -1 ||
+          txt.indexOf('Seedance2.0') !== -1 ||
+          txt.indexOf('@引用素材') !== -1
         ) {
           continue;
         }
         try {
           c.click();
         } catch (e0) {}
-        var opened = isRatioMenuOpen();
-        if (opened) return c;
+        if (isRatioMenuOpen()) return c;
       }
       return null;
     }
 
+    function openXyqRatioDropdown(trigger) {
+      if (!trigger) return;
+      try {
+        trigger.click();
+      } catch (e0) {}
+      try {
+        trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        trigger.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        trigger.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      } catch (e1) {}
+    }
+
     var wantLabel = mapRatioMenuLabel(wantRatio);
     while (true) {
-      // 若菜单已开，直接选项；否则先探测触发器并打开。
       if (!isRatioMenuOpen()) {
-        var trigger = findAspectRatioTriggerByProbe();
+        var trigger =
+          findXyqAspectRatioTriggerDirect() || findAspectRatioTriggerByProbe();
         appendMainLog(roundId, stepKey, 'debug', 'Step11v.debug.findXyqAspectTrigger=' + !!trigger);
         if (!trigger) {
           return { ok: false, code: 'JIMENG_MODE_OR_PARAM_FAILED', detail: '找不到小云雀画幅比例触发器' };
         }
+        openXyqRatioDropdown(trigger);
         await delay(DELAY_OPEN);
       }
 
@@ -1476,7 +1563,7 @@
   /**
    * 即梦 ProseMirror：整段 insertText 含 \\n 可能被当成提交或块分裂异常；换行用 insertLineBreak / Shift+Enter。
    */
-  async function insertJimengContenteditableSoftLineBreaks(target, plain) {
+  async function insertXyqPromptSoftLineBreaks(target, plain) {
     var s = typeof plain === 'string' ? plain : '';
     if (!s) return;
     target.focus();
@@ -1547,7 +1634,7 @@
    * 有图：`img[data-apm-action="content-generator-reference-image"]`，或带 blob/https 且足够大的预览 img。
    * 视频音频：可能没有 img 只有 class 含 audio 或者是音频图示
    */
-  function jimengReferenceItemHasPreviewImage(item) {
+  function xyqReferenceItemHasUploadedPreview(item) {
     if (!item || !item.querySelectorAll) return false;
     
     // 如果有删除按钮容器，说明一定是已经上传的参考内容（图片或音频）
@@ -1571,9 +1658,9 @@
     return false;
   }
 
-  function jimengReferencesRoot() {
-    var pec = doc.querySelector('[class*="prompt-editor-container"]');
-    return (pec && pec.querySelector('[class*="references-"]')) || doc.querySelector('[class*="references-"]');
+  function xyqWorkbenchReferencesRoot() {
+    var shell = doc.querySelector('[class*="inputContainer"]') || doc.querySelector('[class*="promptContainer"]');
+    return (shell && shell.querySelector('[class*="references-"]')) || doc.querySelector('[class*="references-"]');
   }
 
   /**
@@ -1581,8 +1668,8 @@
    * `remove-button-container-*` 的 class 也含子串 remove-button，若先点到外层容器常无法触发移除，会触发 sameTarget 提前结束。
    * 排除含 `remove-button-container` 的节点，优先带关闭图标的可点层（内层 div.remove-button-*）。
    */
-  function pickNextJimengRefRemoveButton() {
-    var refRoot = jimengReferencesRoot();
+  function pickNextXyqWorkbenchReferenceRemoveControl() {
+    var refRoot = xyqWorkbenchReferencesRoot();
     var items = (refRoot || doc).querySelectorAll('[class*="reference-item"]');
     var ii;
     var jj;
@@ -1595,7 +1682,7 @@
     var bestR;
     for (ii = 0; ii < items.length; ii++) {
       item = items[ii];
-      if (!jimengReferenceItemHasPreviewImage(item)) continue;
+      if (!xyqReferenceItemHasUploadedPreview(item)) continue;
       
       nodes = item.querySelectorAll('[class*="remove-button"]');
       best = null;
@@ -1647,16 +1734,73 @@
     return false;
   }
 
+  /**
+   * 智能长视频 2.0：`fileListCompact-*` 内已上传缩略图，逐一点 `removeButton-*`（排除 `@` 的 mentionButton）。
+   */
+  function pickNextXyqCompactAttachmentRemoveButton() {
+    var root = doc.querySelector('[class*="fileListCompact"]');
+    if (!root) return null;
+    var rr = root.getBoundingClientRect();
+    if (!(rr.width > 1 && rr.height > 1)) return null;
+    var btns = root.querySelectorAll('button[type="button"]');
+    var bi;
+    var b;
+    var cls;
+    var br;
+    for (bi = 0; bi < btns.length; bi++) {
+      b = btns[bi];
+      cls = (b.className && String(b.className)) || '';
+      if (cls.indexOf('removeButton') === -1) continue;
+      if (cls.indexOf('mentionButton') !== -1) continue;
+      br = b.getBoundingClientRect();
+      if (br.width <= 0 || br.height <= 0) continue;
+      return b;
+    }
+    return null;
+  }
+
+  /** @param {string} roundId @param {string} stepKey */
+  async function removeXyqCompactUploadedFiles(roundId, stepKey) {
+    var maxC = 48;
+    var n = 0;
+    var last = null;
+    var streak = 0;
+    while (n < maxC) {
+      var btn = pickNextXyqCompactAttachmentRemoveButton();
+      if (!btn) break;
+      if (btn === last) {
+        streak++;
+        if (streak >= 2) {
+          appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.compactRemoveStopSame');
+          break;
+        }
+      } else {
+        streak = 0;
+      }
+      last = btn;
+      n++;
+      try {
+        btn.click();
+      } catch (eRm0) {
+        appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.compactRemoveErr ' + (eRm0 && eRm0.message));
+      }
+      await delay(420);
+    }
+    appendMainLog(roundId, stepKey, 'debug', 'Step12.debug.compactRemoveClicks=' + n);
+  }
+
   /** @param {{ roundId: string }} payload */
   async function runStep12ClearForm(payload) {
     var roundId = payload && payload.roundId ? payload.roundId : '';
     var stepKey = 'step12_jimeng_clear_form';
+    appendMainLog(roundId, stepKey, 'info', 'Step12.移除紧凑附件栏已上传文件');
+    await removeXyqCompactUploadedFiles(roundId, stepKey);
     var target = findXiaoyunqueVideoPromptField();
     if (!target) {
       appendMainLog(roundId, stepKey, 'info', 'Step12.动作失败+未找到提示词输入区域');
       return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
     }
-    target.focus();
+    focusXyqVideoPromptEditorOn(target);
     appendMainLog(roundId, stepKey, 'info', 'Step12.清空提示词');
     clearEditorHardOnTarget(target);
     appendMainLog(roundId, stepKey, 'info', 'Step12.移除参考图');
@@ -1665,7 +1809,7 @@
     var lastRemoveEl = null;
     var sameTargetStreak = 0;
     while (true) {
-      var btn = pickNextJimengRefRemoveButton();
+      var btn = pickNextXyqWorkbenchReferenceRemoveControl();
       if (!btn) break;
       if (removeCount >= removeRefMaxClicks) break;
       if (btn === lastRemoveEl) {
@@ -1692,7 +1836,7 @@
   var PASTE_GAP_MS = 1000;
   var BEFORE_FIRST_PASTE_MS = 500;
   var AFTER_LAST_PASTE_SETTLE_MS = 1200;
-  /** @ 后等待即梦「可能@的内容」下拉：须出现 .lv-select-popup 且已有 li[role="option"]（选项渲染完） */
+  /** @ 后等待「素材引用」下拉：`dropdown-*` + `sectionHeader`「素材引用」+ `button.assetItem-*` */
   var AT_POPUP_WAIT_MAX_MS = 12000;
   /** 连续这么久仍无弹层则删掉 @ 再 insertText @ 一次（比合成左右键易生效） */
   var AT_POPUP_STUCK_SLICE_MS = 1000;
@@ -1702,14 +1846,30 @@
   /** 防止异常 DOM 死循环；正常每轮应处理掉一个 (参考图片N) */
   var STEP15_MAX_PLACEHOLDER_ROUNDS = 64;
 
-  function tryJimengAtSelectPopupReady() {
-    var popup = doc.querySelector('.lv-select-popup');
-    if (!popup) return null;
-    var r = popup.getBoundingClientRect();
-    var visible = r.width > 1 && r.height > 1;
-    var options = popup.querySelectorAll('li[role="option"]');
-    if (visible && options.length > 0) {
-      return popup;
+  /**
+   * 小云雀 @ 素材：`sectionHeader-*` 文案「素材引用」祖先 `dropdown-*`，内含 `button.assetItem-*`。
+   */
+  function tryXyqAtMaterialDropdownReady() {
+    var headers = doc.querySelectorAll('[class*="sectionHeader"]');
+    var hi;
+    var h;
+    var root;
+    var r;
+    var items;
+    for (hi = 0; hi < headers.length; hi++) {
+      h = headers[hi];
+      if (!h || (h.textContent || '').indexOf('素材引用') === -1) continue;
+      root = h.closest('[class*="dropdown"]');
+      if (!root) continue;
+      try {
+        if (root.style && root.style.visibility === 'hidden') continue;
+      } catch (eSt) {
+        /* ignore */
+      }
+      r = root.getBoundingClientRect();
+      if (!(r.width > 2 && r.height > 2)) continue;
+      items = root.querySelectorAll('button[type="button"][class*="assetItem"], button[class*="assetItem"]');
+      if (items.length > 0) return root;
     }
     return null;
   }
@@ -1778,7 +1938,7 @@
   }
 
   /** 删掉当前 @ 再 insertText @，用于弹层卡住时重触发 */
-  async function retryJimengAtByDeleteAndReinsertAt(rootEl) {
+  async function retryXyqAtByDeleteAndReinsertAt(rootEl) {
     if (!rootEl) return false;
     deleteOneCharBackwardInPromptEditable(rootEl);
     await delay(AT_POPUP_REINSERT_SETTLE_MS);
@@ -1797,48 +1957,89 @@
   }
 
   /**
-   * 轮询直至 @ 下拉挂载且至少有一条 option。若连续 AT_POPUP_STUCK_SLICE_MS 仍无弹层，则删掉 @ 再插入 @（总时长 AT_POPUP_WAIT_MAX_MS）。
+   * 轮询直至「素材引用」下拉可见且 `assetItem` 数量 ≥ minAssetItems（刚贴完图时列表会逐张补齐，不能见弹层就点）。
+   * 仅当**长时间完全无下拉**时才删 @ 重插；已弹出但条数不足则一直等到 deadline。
    * @param {Element | null} targetForReinsert 提示词可编辑根节点
+   * @param {number} [minAssetItems] 本次要选「图片 N」时传 N；默认 1
    * @returns {Promise<{ ok: true, popup: Element } | { ok: false, code: string }>}
    */
-  async function waitForJimengAtSelectPopupReady(roundId, stepKey, targetForReinsert) {
+  async function waitForXyqMaterialCitationDropdownReady(roundId, stepKey, targetForReinsert, minAssetItems) {
+    var minNeed = typeof minAssetItems === 'number' && minAssetItems > 0 ? Math.floor(minAssetItems) : 1;
     var deadline = Date.now() + AT_POPUP_WAIT_MAX_MS;
+    var noPopupSince = Date.now();
     while (Date.now() < deadline) {
-      var sliceEnd = Date.now() + AT_POPUP_STUCK_SLICE_MS;
-      if (sliceEnd > deadline) sliceEnd = deadline;
-      while (Date.now() < sliceEnd) {
-        var popupOk = tryJimengAtSelectPopupReady();
-        if (popupOk) {
-          var nOpt = popupOk.querySelectorAll('li[role="option"]').length;
-          appendMainLog(roundId, stepKey, 'debug', 'Step15.debug.atPopupReady options=' + nOpt);
+      var popupOk = tryXyqAtMaterialDropdownReady();
+      if (popupOk) {
+        noPopupSince = Date.now();
+        var nOpt = popupOk.querySelectorAll('button[class*="assetItem"]').length;
+        if (nOpt >= minNeed) {
+          appendMainLog(
+            roundId,
+            stepKey,
+            'debug',
+            'Step15.debug.atPopupReady assetItems=' + nOpt + ' min=' + minNeed,
+          );
           return { ok: true, popup: popupOk };
         }
+        appendMainLog(
+          roundId,
+          stepKey,
+          'debug',
+          'Step15.debug.atPopupWaitMoreAssets have=' + nOpt + ' need=' + minNeed,
+        );
         await delay(AT_POPUP_POLL_MS);
+        continue;
       }
-      if (Date.now() >= deadline) break;
-      appendMainLog(roundId, stepKey, 'debug', 'Step15.debug.atPopupStuckReinsertAt');
-      var reinsertOk = await retryJimengAtByDeleteAndReinsertAt(targetForReinsert);
-      if (!reinsertOk) {
-        appendMainLog(roundId, stepKey, 'debug', 'Step15.debug.atPopupStuckReinsertAtInsertFailed');
+      if (Date.now() - noPopupSince >= AT_POPUP_STUCK_SLICE_MS) {
+        appendMainLog(roundId, stepKey, 'debug', 'Step15.debug.atPopupStuckReinsertAt');
+        var reinsertOk = await retryXyqAtByDeleteAndReinsertAt(targetForReinsert);
+        if (!reinsertOk) {
+          appendMainLog(roundId, stepKey, 'debug', 'Step15.debug.atPopupStuckReinsertAtInsertFailed');
+        }
+        noPopupSince = Date.now();
+        await delay(AT_POPUP_REINSERT_SETTLE_MS);
+        continue;
       }
-      await delay(AT_POPUP_REINSERT_SETTLE_MS);
+      await delay(AT_POPUP_POLL_MS);
     }
     appendMainLog(roundId, stepKey, 'info', 'Step15.动作失败+@ 下拉未在时限内加载完成');
     return { ok: false, code: 'JIMENG_AT_POPUP_TIMEOUT' };
   }
 
   /**
-   * @param {Element} [rootPopup] 若已由上一步 wait 得到，避免多实例时 query 到错误弹层
+   * @param {Element | null} [rootPopup] 由上一步 wait 传入的「素材引用」根节点，避免误点其它浮层
    */
-  async function clickJimengReferenceOption(imageNum, rootPopup) {
-    var popup = rootPopup || doc.querySelector('.lv-select-popup');
-    var options = popup ? popup.querySelectorAll('li[role="option"]') : [];
-    for (var oi = 0; oi < options.length; oi++) {
-      var li = options[oi];
-      var mm = (li.textContent || '').match(/图片(\d+)/);
+  async function clickXyqMaterialCitationPickImage(imageNum, rootPopup) {
+    var popup = rootPopup || tryXyqAtMaterialDropdownReady();
+    if (!popup) return false;
+    var assetBtns = popup.querySelectorAll('button[type="button"][class*="assetItem"], button[class*="assetItem"]');
+    var ai;
+    var btn;
+    var nm;
+    var label;
+    var mm;
+    var img;
+    var alt;
+    var mm2;
+    for (ai = 0; ai < assetBtns.length; ai++) {
+      btn = assetBtns[ai];
+      nm = btn.querySelector('[class*="assetName"]');
+      label = ((nm && nm.textContent) || btn.textContent || '').replace(/\s+/g, ' ').trim();
+      mm = label.match(/图片\s*(\d+)/) || label.match(/^图片(\d+)$/);
       if (mm && parseInt(mm[1], 10) === imageNum) {
         await delay(100);
-        li.click();
+        btn.click();
+        return true;
+      }
+    }
+    for (ai = 0; ai < assetBtns.length; ai++) {
+      btn = assetBtns[ai];
+      img = btn.querySelector('img[alt]');
+      alt = (img && img.getAttribute('alt')) || '';
+      mm2 = alt.match(/图片\s*(\d+)/) || alt.match(/^图片(\d+)$/);
+      if (mm2 && parseInt(mm2[1], 10) === imageNum) {
+        await delay(100);
+        btn.click();
         return true;
       }
     }
@@ -1865,7 +2066,7 @@
     if (!target) {
       return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
     }
-    target.focus();
+    focusXyqVideoPromptEditorOn(target);
     await delay(BEFORE_FIRST_PASTE_MS);
     var sizes = [];
     var failIdx = [];
@@ -1888,37 +2089,40 @@
       
         var file = new File([blob], 'audio' + (idx + 1) + '.' + ext, { type: mime });
       
-      // Try to find an audio input file
+      // Try to find an audio-specific file input（勿用「含 video」的素材上传框，小云雀常与 .png/.mp4 共用一个 accept）
       var allFileInps = Array.from(doc.querySelectorAll('input[type="file"]'));
       var audioInp = null;
       for (var fi = 0; fi < allFileInps.length; fi++) {
         var inp = allFileInps[fi];
-        if (inp.accept && (inp.accept.indexOf('audio') !== -1 || inp.accept.indexOf('video') !== -1)) {
+        var acc = ((inp && inp.accept) || '').toLowerCase();
+        if (acc.indexOf('audio') !== -1 || /\.(mp3|wav|m4a|aac|ogg|flac)(\b|,|$)/i.test(acc)) {
           audioInp = inp;
           break;
         }
       }
-      
-      // If we didn't find an explicit audio input, let's try to find ANY file input that is visible or in the reference group
+
       if (!audioInp && allFileInps.length > 0) {
-          // Look for input in reference group
-          for (var i2 = 0; i2 < allFileInps.length; i2++) {
-              var p2 = allFileInps[i2].parentElement;
-              var isRef = false;
-              while (p2 && p2 !== doc.body) {
-                  var c2 = (p2.className && String(p2.className)) || '';
-                  if (c2.indexOf('reference-group') !== -1 || c2.indexOf('audio-') !== -1) {
-                      isRef = true;
-                      break;
-                  }
-                  p2 = p2.parentElement;
-              }
-              if (isRef) {
-                  audioInp = allFileInps[i2];
-                  break;
-              }
+        for (var i2 = 0; i2 < allFileInps.length; i2++) {
+          var p2 = allFileInps[i2].parentElement;
+          var isRef = false;
+          while (p2 && p2 !== doc.body) {
+            var c2 = (p2.className && String(p2.className)) || '';
+            if (
+              c2.indexOf('reference-group') !== -1 ||
+              c2.indexOf('audio-') !== -1 ||
+              c2.indexOf('voice') !== -1 ||
+              c2.indexOf('音色') !== -1
+            ) {
+              isRef = true;
+              break;
+            }
+            p2 = p2.parentElement;
           }
-          if (!audioInp) audioInp = allFileInps[allFileInps.length > 1 ? 1 : 0]; // fallback
+          if (isRef) {
+            audioInp = allFileInps[i2];
+            break;
+          }
+        }
       }
       
       if (audioInp) {
@@ -1939,7 +2143,7 @@
       var dtOne = new DataTransfer();
       dtOne.items.add(file);
       try {
-        target.focus();
+        focusXyqVideoPromptEditorOn(target);
         target.dispatchEvent(new ClipboardEvent('paste', { bubbles: false, cancelable: true, clipboardData: dtOne }));
         appendMainLog(roundId, stepKey, 'debug', 'Step13b.debug.syntheticPaste idx=' + idx);
       } catch (e2) {
@@ -1957,28 +2161,8 @@
     return { ok: true };
   }
 
-  /**
-   * @param {Element} [rootPopup] 若已由上一步 wait 得到，避免多实例时 query 到错误弹层
-   */
-  async function clickJimengReferenceAudioOption(audioNum, rootPopup) {
-    var popup = rootPopup || doc.querySelector('.lv-select-popup');
-    var options = popup ? popup.querySelectorAll('li[role="option"]') : [];
-    for (var oi = 0; oi < options.length; oi++) {
-      var li = options[oi];
-      var mm = (li.textContent || '').match(/(音色|音频)(\d+)/);
-      if (mm && parseInt(mm[2], 10) === audioNum) {
-        await delay(100);
-        li.click();
-        return true;
-      }
-    }
-    // Jimeng audio might not be named "音频1", it might just be the only option or have the filename.
-    // If we can't find by "音频N", let's just pick the audioNum-th option (0-indexed).
-    if (options.length >= audioNum) {
-      await delay(100);
-      options[audioNum - 1].click();
-      return true;
-    }
+  /** 小云雀视频工作台不支持参考音色 @ 选择；保留函数签名供遗留步骤结构调用 */
+  async function clickXyqMaterialCitationPickAudio(_audioNum, _rootPopup) {
     return false;
   }
 
@@ -1995,6 +2179,7 @@
       appendMainLog(roundId, stepKey, 'debug', 'Step15b.debug.textareaSkipAt');
       return { ok: true };
     }
+    focusXyqVideoPromptEditorOn(target);
     var round = 0;
     while (round < STEP15_MAX_PLACEHOLDER_ROUNDS) {
       round++;
@@ -2036,11 +2221,11 @@
         return { ok: false, code: 'JIMENG_AT_INSERT_FAILED' };
       }
       target.dispatchEvent(new Event('input', { bubbles: true }));
-      var wPop = await waitForJimengAtSelectPopupReady(roundId, stepKey, target);
+      var wPop = await waitForXyqMaterialCitationDropdownReady(roundId, stepKey, target, 1);
       if (!wPop.ok) {
         return { ok: false, code: wPop.code };
       }
-      var clicked = await clickJimengReferenceAudioOption(audioNum, wPop.popup);
+      var clicked = await clickXyqMaterialCitationPickAudio(audioNum, wPop.popup);
       appendMainLog(roundId, stepKey, 'debug', 'Step15b.debug.refOption n=' + audioNum + ' ok=' + clicked);
       if (!clicked) {
         appendMainLog(roundId, stepKey, 'info', 'Step15b.动作失败+下拉已加载但无对应音频项' + audioNum);
@@ -2066,14 +2251,14 @@
       return { ok: true, skipped: true };
     }
     var inj = g.__idlinkPicpuckInject;
-    if (!inj || typeof inj.dataUrlToBlob !== 'function' || typeof inj.collectJimengReferenceFileInputs !== 'function') {
+    if (!inj || typeof inj.dataUrlToBlob !== 'function' || typeof inj.collectXyqWorkbenchFileInputs !== 'function') {
       return { ok: false, code: 'JIMENG_PAGE_HELPERS_MISSING' };
     }
     var target = findXiaoyunqueVideoPromptField();
     if (!target) {
       return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
     }
-    target.focus();
+    focusXyqVideoPromptEditorOn(target);
     await delay(BEFORE_FIRST_PASTE_MS);
     var sizes = [];
     var failIdx = [];
@@ -2092,9 +2277,9 @@
       var fileType = fi.fileType;
       var dtOne = new DataTransfer();
       dtOne.items.add(fileOne);
-      appendMainLog(roundId, stepKey, 'debug', 'Step13.debug.paste idx=' + idx + ' ' + inj.jimengPasteBrief(images[idx], blob, fileOne));
+      appendMainLog(roundId, stepKey, 'debug', 'Step13.debug.paste idx=' + idx + ' ' + inj.xyqPasteBrief(images[idx], blob, fileOne));
 
-      var slotInputs = inj.collectJimengReferenceFileInputs(doc);
+      var slotInputs = inj.collectXyqWorkbenchFileInputs(doc);
       var fileInp = slotInputs.length > idx ? slotInputs[idx] : slotInputs[0];
       if (fileInp) {
         try {
@@ -2115,7 +2300,7 @@
         clipMap[fileType] = blob;
         try {
           await navigator.clipboard.write([new ClipboardItem(clipMap)]);
-          target.focus();
+          focusXyqVideoPromptEditorOn(target);
           var execOk = false;
           try {
             execOk = document.execCommand('paste');
@@ -2126,7 +2311,7 @@
         } catch (err) {
           appendMainLog(roundId, stepKey, 'debug', 'Step13.debug.clipboardWriteFail ' + (err && err.message));
           try {
-            target.focus();
+            focusXyqVideoPromptEditorOn(target);
             target.dispatchEvent(new ClipboardEvent('paste', { bubbles: false, cancelable: true, clipboardData: dtOne }));
           } catch (e1) {
             appendMainLog(roundId, stepKey, 'debug', 'Step13.debug.syntheticPasteErr ' + (e1 && e1.message));
@@ -2137,7 +2322,7 @@
       }
 
       try {
-        target.focus();
+        focusXyqVideoPromptEditorOn(target);
         target.dispatchEvent(new ClipboardEvent('paste', { bubbles: false, cancelable: true, clipboardData: dtOne }));
       } catch (e2) {
         /* ignore */
@@ -2167,14 +2352,14 @@
       return { ok: false, code: 'JIMENG_PROMPT_FIELD_NOT_FOUND' };
     }
     var prompt = typeof payload.prompt === 'string' ? payload.prompt : '';
-    target.focus();
+    focusXyqVideoPromptEditorOn(target);
     var isTa = target.tagName === 'TEXTAREA';
     if (isTa) {
       target.value = prompt;
     } else if (!prompt) {
       clearEditorHardOnTarget(target);
     } else {
-      await insertJimengContenteditableSoftLineBreaks(target, prompt);
+      await insertXyqPromptSoftLineBreaks(target, prompt);
     }
     target.dispatchEvent(new Event('input', { bubbles: true }));
     return { ok: true };
@@ -2207,6 +2392,9 @@
       appendMainLog(roundId, stepKey, 'debug', 'Step15.debug.textareaSkipAt');
       return { ok: true };
     }
+    focusXyqVideoPromptEditorOn(target);
+    /* 贴图后素材列表异步刷新，@ 前先给一点时间，避免下拉里尚未出现「图片3」 */
+    await delay(700);
     var round = 0;
     while (round < STEP15_MAX_PLACEHOLDER_ROUNDS) {
       round++;
@@ -2232,11 +2420,11 @@
         return { ok: false, code: 'JIMENG_AT_INSERT_FAILED' };
       }
       target.dispatchEvent(new Event('input', { bubbles: true }));
-      var wPop = await waitForJimengAtSelectPopupReady(roundId, stepKey, target);
+      var wPop = await waitForXyqMaterialCitationDropdownReady(roundId, stepKey, target, n);
       if (!wPop.ok) {
         return { ok: false, code: wPop.code };
       }
-      var clicked = await clickJimengReferenceOption(n, wPop.popup);
+      var clicked = await clickXyqMaterialCitationPickImage(n, wPop.popup);
       appendMainLog(roundId, stepKey, 'debug', 'Step15.debug.refOption n=' + n + ' ok=' + clicked);
       if (!clicked) {
         appendMainLog(roundId, stepKey, 'info', 'Step15.动作失败+下拉已加载但无图片' + n);
