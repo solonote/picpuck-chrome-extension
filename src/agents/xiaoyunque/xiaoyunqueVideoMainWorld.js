@@ -1128,6 +1128,8 @@
         if (
           t.indexOf('2.0 VIP') !== -1 ||
           tFirst === '2.0' ||
+          tFirst === '2.0 Fast' ||
+          t.indexOf('2.0 Fast') !== -1 ||
           t.indexOf('Seedance 2.0 VIP') !== -1 ||
           t.indexOf('Seedance 2.0 Fast VIP') !== -1 ||
           t.indexOf('Seedance 2.0 Fast') !== -1 ||
@@ -1236,12 +1238,10 @@
       var items = panelRoot.querySelectorAll('[class*="modelItem"]');
       var i;
       var item;
-      var nt;
       for (i = 0; i < items.length; i++) {
         item = items[i];
         if (!isVisible(item)) continue;
-        nt = readModelNameFromItem(item);
-        if (nt && nt === want) return item;
+        if (readModelNameFromItem(item) && itemRowStrictlyMatchesWantModel(item, modelLabel)) return item;
       }
       var rows = panelRoot.querySelectorAll('button,[role="button"],li,div');
       for (i = 0; i < rows.length; i++) {
@@ -1257,7 +1257,8 @@
       for (var j = 0; j < spans.length; j++) {
         var s = spans[j];
         if (!isVisible(s)) continue;
-        if (!textEq(s.textContent || '', modelLabel)) continue;
+        var st = (s.textContent || '').trim().split(/\r?\n/)[0].trim();
+        if (!st || !xyqTriggerMatchesChosenModel(st, modelLabel)) continue;
         var row = s.closest && s.closest('[class*="modelItem"],button,[role="button"],li,div');
         if (row && isVisible(row)) return row;
       }
@@ -1272,7 +1273,7 @@
       }
 
       var before = readXiaoyunqueTriggerModelLabel(trigger);
-      if (textEq(before, wantModel)) {
+      if (xyqTriggerMatchesChosenModel(before, wantModel)) {
         return { ok: true };
       }
 
