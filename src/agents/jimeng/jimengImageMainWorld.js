@@ -1310,7 +1310,7 @@
     var options = popup ? popup.querySelectorAll('li[role="option"]') : [];
     for (var oi = 0; oi < options.length; oi++) {
       var li = options[oi];
-      var mm = (li.textContent || '').match(/图片(\d+)/);
+      var mm = (li.textContent || '').match(/(?:图片|image)(\d+)/i);
       if (mm && parseInt(mm[1], 10) === imageNum) {
         await delay(100);
         li.click();
@@ -1440,7 +1440,7 @@
     var options = popup ? popup.querySelectorAll('li[role="option"]') : [];
     for (var oi = 0; oi < options.length; oi++) {
       var li = options[oi];
-      var mm = (li.textContent || '').match(/(音色|音频)(\d+)/);
+      var mm = (li.textContent || '').match(/(音色|音频|audio|voice)(\d+)/i);
       if (mm && parseInt(mm[2], 10) === audioNum) {
         await delay(100);
         li.click();

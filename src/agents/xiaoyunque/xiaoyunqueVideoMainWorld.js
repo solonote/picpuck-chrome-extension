@@ -2278,7 +2278,7 @@
       btn = assetBtns[ai];
       nm = btn.querySelector('[class*="assetName"]');
       label = ((nm && nm.textContent) || btn.textContent || '').replace(/\s+/g, ' ').trim();
-      mm = label.match(/图片\s*(\d+)/) || label.match(/^图片(\d+)$/);
+      mm = label.match(/(?:图片|image)\s*(\d+)/i) || label.match(/^(?:图片|image)(\d+)$/i);
       if (mm && parseInt(mm[1], 10) === imageNum) {
         await delay(100);
         btn.click();
@@ -2289,7 +2289,7 @@
       btn = assetBtns[ai];
       img = btn.querySelector('img[alt]');
       alt = (img && img.getAttribute('alt')) || '';
-      mm2 = alt.match(/图片\s*(\d+)/) || alt.match(/^图片(\d+)$/);
+      mm2 = alt.match(/(?:图片|image)\s*(\d+)/i) || alt.match(/^(?:图片|image)(\d+)$/i);
       if (mm2 && parseInt(mm2[1], 10) === imageNum) {
         await delay(100);
         btn.click();
