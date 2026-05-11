@@ -1308,9 +1308,12 @@
   async function clickJimengReferenceOption(imageNum, rootPopup) {
     var popup = rootPopup || doc.querySelector('.lv-select-popup');
     var options = popup ? popup.querySelectorAll('li[role="option"]') : [];
+    // 收集所有选项文本用于调试
+    var optionTexts = [];
     for (var oi = 0; oi < options.length; oi++) {
       var li = options[oi];
       var txt = (li.textContent || '').replace(/\s+/g, ' ').trim();
+      optionTexts.push(txt);
       // 优先匹配「图片N」或「imageN」
       var mm = txt.match(/(?:图片|image)\s*(\d+)/i);
       // 兜底：直接按顺序选第 N 个（排除空标题 li）
@@ -1324,6 +1327,21 @@
         return true;
       }
     }
+    // 文本匹配全部失败：按位置兜底，选第 imageNum 个有效选项
+    var validOptions = [];
+    for (var vi = 0; vi < options.length; vi++) {
+      var t = (options[vi].textContent || '').replace(/\s+/g, ' ').trim();
+      if (t && !t.match(/^可能@的内容/)) validOptions.push(options[vi]);
+    }
+    var fallbackIdx = imageNum - 1;
+    if (fallbackIdx >= 0 && fallbackIdx < validOptions.length) {
+      await delay(100);
+      validOptions[fallbackIdx].click();
+      return true;
+    }
+    // 记录调试信息到全局以便排查
+    if (typeof g.__idlinkJimengLastOptionTexts === 'undefined') g.__idlinkJimengLastOptionTexts = [];
+    g.__idlinkJimengLastOptionTexts = optionTexts;
     return false;
   }
 
