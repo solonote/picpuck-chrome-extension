@@ -1308,15 +1308,15 @@
   async function clickJimengReferenceOption(imageNum, rootPopup) {
     var popup = rootPopup || doc.querySelector('.lv-select-popup');
     var options = popup ? popup.querySelectorAll('li[role="option"]') : [];
-    // 收集所有选项文本用于调试
-    var optionTexts = [];
+    console.log('[PicPuck] clickJimengReferenceOption imageNum=' + imageNum + ' options=' + options.length);
     for (var oi = 0; oi < options.length; oi++) {
       var li = options[oi];
-      var txt = (li.textContent || '').replace(/\s+/g, ' ').trim();
-      optionTexts.push(txt);
-      // 优先匹配「图片N」或「imageN」
+      // 优先从标签 span 取文本（更精确），回退到 textContent
+      var labelSpan = li.querySelector('[class*="option-label"]') || li.querySelector('[class*="ellipsis-text"]');
+      var txt = labelSpan ? (labelSpan.textContent || '').replace(/\s+/g, ' ').trim() : '';
+      if (!txt) txt = (li.textContent || '').replace(/\s+/g, ' ').trim();
+      console.log('[PicPuck] option[' + oi + ']="' + txt + '"');
       var mm = txt.match(/(?:图片|image)\s*(\d+)/i);
-      // 兜底：直接按顺序选第 N 个（排除空标题 li）
       if (!mm && txt && !txt.match(/^可能@的内容/)) {
         var numMatch = txt.match(/(\d+)/);
         if (numMatch) mm = numMatch;
@@ -1324,24 +1324,19 @@
       if (mm && parseInt(mm[1], 10) === imageNum) {
         await delay(100);
         li.click();
+        console.log('[PicPuck] clicked by text match');
         return true;
       }
     }
-    // 文本匹配全部失败：按位置兜底，选第 imageNum 个有效选项
-    var validOptions = [];
-    for (var vi = 0; vi < options.length; vi++) {
-      var t = (options[vi].textContent || '').replace(/\s+/g, ' ').trim();
-      if (t && !t.match(/^可能@的内容/)) validOptions.push(options[vi]);
-    }
-    var fallbackIdx = imageNum - 1;
-    if (fallbackIdx >= 0 && fallbackIdx < validOptions.length) {
+    // 兜底：直接按位置选第 imageNum 个 li[role="option"]
+    var idx = imageNum - 1;
+    if (idx >= 0 && idx < options.length) {
       await delay(100);
-      validOptions[fallbackIdx].click();
+      options[idx].click();
+      console.log('[PicPuck] clicked by fallback index=' + idx);
       return true;
     }
-    // 记录调试信息到全局以便排查
-    if (typeof g.__idlinkJimengLastOptionTexts === 'undefined') g.__idlinkJimengLastOptionTexts = [];
-    g.__idlinkJimengLastOptionTexts = optionTexts;
+    console.log('[PicPuck] all failed, options=' + options.length);
     return false;
   }
 
