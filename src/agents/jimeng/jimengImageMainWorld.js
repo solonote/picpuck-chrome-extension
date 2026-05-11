@@ -1310,7 +1310,14 @@
     var options = popup ? popup.querySelectorAll('li[role="option"]') : [];
     for (var oi = 0; oi < options.length; oi++) {
       var li = options[oi];
-      var mm = (li.textContent || '').match(/(?:图片|image)(\d+)/i);
+      var txt = (li.textContent || '').replace(/\s+/g, ' ').trim();
+      // 优先匹配「图片N」或「imageN」
+      var mm = txt.match(/(?:图片|image)\s*(\d+)/i);
+      // 兜底：直接按顺序选第 N 个（排除空标题 li）
+      if (!mm && txt && !txt.match(/^可能@的内容/)) {
+        var numMatch = txt.match(/(\d+)/);
+        if (numMatch) mm = numMatch;
+      }
       if (mm && parseInt(mm[1], 10) === imageNum) {
         await delay(100);
         li.click();
